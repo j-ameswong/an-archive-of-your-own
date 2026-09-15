@@ -26,6 +26,16 @@ const SORT_COLUMNS = {
   title: 'title',
 };
 
+// User input is never a valid FTS5 expression on its own: bare -, *, ", :, (
+// and the AND/OR/NOT keywords are all operators and raise a syntax error.
+// Keep only letter/digit runs and quote each one, so every term is a literal.
+// Trailing * keeps prefix matching, which LIKE '%q%' used to give for free.
+function ftsQuery(q) {
+  const terms = q.match(/[\p{L}\p{N}]+/gu);
+  if (!terms) return null;
+  return terms.map((t) => `"${t}"*`).join(' AND ');
+}
+
 function listFics(params) {
   const where = [];
   const args = [];
@@ -48,12 +58,15 @@ function listFics(params) {
 
   const q = (params.get('q') || '').trim();
   if (q) {
-    where.push(`(
-      title LIKE ? OR author LIKE ? OR summary LIKE ?
-      OR id IN (SELECT fic_id FROM fic_tag WHERE tag LIKE ?)
-    )`);
-    const like = `%${q}%`;
-    args.push(like, like, like, like);
+    const match = ftsQuery(q);
+    if (match) {
+      where.push('id IN (SELECT rowid FROM fic_fts WHERE fic_fts MATCH ?)');
+      args.push(match);
+    } else {
+      // q was punctuation only: no searchable term, so match nothing,
+      // as the old LIKE '%q%' did rather than returning everything.
+      where.push('0');
+    }
   }
 
   const sortCol = SORT_COLUMNS[params.get('sort')] || 'updated_at';

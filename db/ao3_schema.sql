@@ -1,4 +1,4 @@
--- Personal AO3 archive (AO3-only subset, migrated from archive.sqlite3)
+-- Personal AO3 archive
 
 CREATE TABLE IF NOT EXISTS fic (
     id             INTEGER PRIMARY KEY,
@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS fic (
     slug           TEXT NOT NULL,
     url            TEXT NOT NULL,
 
-    -- facts about the fic, refreshed from the extraction DB on every build
+    -- fic metadata, refreshed during scheduled enrich/import
     title          TEXT,
     author         TEXT,
     author_url     TEXT,
@@ -14,18 +14,17 @@ CREATE TABLE IF NOT EXISTS fic (
     word_count     INTEGER,
     chapters_done  INTEGER,
     chapters_total INTEGER,          -- NULL = author has not declared a total
-    is_complete    INTEGER,          -- the *author* finished it; says nothing about the reader
+    is_complete    INTEGER,          -- the author marked it as finished
     rating         TEXT,
     published_at   TEXT,
     updated_at     TEXT,
     kudos          INTEGER,
     bookmarks      INTEGER,
 
-    -- curation: the reader's own judgement, irreplaceable, never re-derivable
+    -- set manually
     fandom_bucket  TEXT,
     note           TEXT,
 
-    -- favourite is the reader's own flag and is never re-derived.
     favourite      INTEGER NOT NULL DEFAULT 0,
 
     -- reading state: the system of record lives here, not upstream
