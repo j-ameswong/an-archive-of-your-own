@@ -48,3 +48,135 @@ export function normalizeUrl(input) {
     url: `https://archiveofourown.org/${slug}`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Fetching
+// ---------------------------------------------------------------------------
+
+// AO3 asks clients to space requests out. One at a time, five seconds apart, is
+// well under anything they throttle, and the whole archive is only ~670 rows.
+// Overridable so the test suite doesn't sit through the real pacing.
+const MIN_INTERVAL_MS = Number(process.env.AO3_MIN_INTERVAL_MS ?? 5000);
+const TIMEOUT_MS = 30_000;
+const MAX_ATTEMPTS = 3;
+
+// A Retry-After longer than this means come back later, not block the import.
+const MAX_RETRY_AFTER_MS = 60_000;
+
+// AO3 asks automated clients to be contactable. Kept in .env rather than the
+// source so a clone doesn't publish an address.
+const CONTACT = process.env.ARCHIVE_CONTACT?.trim();
+const USER_AGENT =
+  `an-archive-of-your-own/0.1 (personal archive tool${CONTACT ? `; +${CONTACT}` : ''})`;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The _otwarchive_session cookie, from .env. Without it AO3 hides works whose
+// authors restricted them to logged-in users. Read per call, not captured at
+// import time, so tests can set and clear it.
+function sessionCookie() {
+  const raw = process.env.AO3_SESSION?.trim();
+  if (!raw) return null;
+  // Accept a bare value or a whole "name=value" paste.
+  const prefix = '_otwarchive_session=';
+  return (raw.startsWith(prefix) ? raw.slice(prefix.length) : raw) || null;
+}
+
+// Requests run one at a time, MIN_INTERVAL_MS apart, however many callers ask.
+let queue = Promise.resolve();
+let lastRequestAt = 0;
+
+function serial(fn) {
+  const result = queue.then(async () => {
+    const wait = MIN_INTERVAL_MS - (Date.now() - lastRequestAt);
+    if (wait > 0) await sleep(wait);
+    return fn();
+  });
+  // Keep the queue alive: one failed fetch must not wedge every later one.
+  queue = result.then(() => {}, () => {});
+  return result;
+}
+
+// Retry-After is either a seconds count or an HTTP date.
+function retryAfterMs(header) {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
+}
+
+// AO3 answers a restricted work with 200 and a redirect to the login form,
+// so the final url is the only reliable signal.
+function isLoginRedirect(url) {
+  try {
+    return new URL(url).pathname === '/users/login';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch one AO3 work or series page.
+ *
+ * @returns {Promise<{status: 'ok', html: string, url: string}
+ *   | {status: 'restricted'|'expired_session'|'missing'}
+ *   | {status: 'error', error: string}>}
+ */
+export function fetchAo3(url, { fetchImpl = fetch } = {}) {
+  return serial(async () => {
+    const target = `${url}?view_adult=true`;
+    let lastError = 'unknown error';
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const cookie = sessionCookie();
+      const headers = { 'User-Agent': USER_AGENT, Accept: 'text/html' };
+      if (cookie) headers.Cookie = `_otwarchive_session=${cookie}`;
+
+      let res;
+      try {
+        lastRequestAt = Date.now();
+        res = await fetchImpl(target, {
+          headers,
+          redirect: 'follow',
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+      } catch (err) {
+        // Network failure or timeout: both worth another go.
+        lastError = err?.message || String(err);
+        lastRequestAt = Date.now();
+        if (attempt === MAX_ATTEMPTS) break;
+        await sleep(MIN_INTERVAL_MS * attempt);
+        continue;
+      }
+      lastRequestAt = Date.now();
+
+      // AO3 fails transiently, including 525 from its CDN, so a 5xx is a
+      // reason to retry rather than a verdict.
+      if (res.status === 429 || res.status >= 500) {
+        lastError = `HTTP ${res.status}`;
+        if (attempt === MAX_ATTEMPTS) break;
+        const after = res.status === 429 ? retryAfterMs(res.headers.get('retry-after')) : null;
+        if (after !== null && after > MAX_RETRY_AFTER_MS) {
+          return { status: 'error', error: `rate limited for ${Math.round(after / 1000)}s` };
+        }
+        await sleep(after ?? MIN_INTERVAL_MS * attempt);
+        continue;
+      }
+
+      if (isLoginRedirect(res.url)) {
+        // Telling the user a work is restricted when really their cookie died
+        // would send them hunting for the wrong problem.
+        return { status: cookie ? 'expired_session' : 'restricted' };
+      }
+
+      if (res.status === 404) return { status: 'missing' };
+
+      if (!res.ok) return { status: 'error', error: `HTTP ${res.status}` };
+
+      return { status: 'ok', html: await res.text(), url: res.url };
+    }
+
+    return { status: 'error', error: lastError };
+  });
+}

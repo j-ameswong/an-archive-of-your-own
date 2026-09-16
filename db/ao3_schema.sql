@@ -36,11 +36,11 @@ CREATE TABLE IF NOT EXISTS fic (
     state_changed_at TEXT,
 
     -- Enrichment bookkeeping: when the upstream facts above were last
-    -- refreshed, and why the last attempt failed. NULL status = never fetched;
-    -- 'fichub' marks a row filled from the fallback, whose numbers can lag AO3
-    -- by years. Last in the table because ALTER TABLE ADD COLUMN appends, and
-    -- an existing database must end up with the column order this file
-    -- declares.
+    -- refreshed, and why the last attempt failed. NULL status = never fetched.
+    -- 'fichub' is unused; SQLite cannot narrow a CHECK without rebuilding the
+    -- table, so the value stays. See docs/decisions/0001-scrape-ao3-directly.md.
+    -- These columns come last because ALTER TABLE ADD COLUMN appends, and an
+    -- existing database must end up with the column order this file declares.
     enriched_at    TEXT,
     fetch_status   TEXT CHECK (fetch_status IN ('ok','restricted','missing','error','fichub')),
     fetch_error    TEXT,
