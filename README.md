@@ -116,14 +116,25 @@ rather than through a third-party API — see
 - Series pages state no rating, kudos, chapter counts or full tag lists; those
   come back `null` or empty.
 
-Database writes and the frontend entry point are not built yet. Scheduled
-enrichment will reuse the same fetch and parse path, selecting rows by
-`enriched_at` instead of a pasted URL, and will leave curation and reading state
-untouched.
+`server/store.js` writes the result:
 
-AO3 renders timestamps in the logged-in account's timezone, so a page fetched
-with `AO3_SESSION` set can report `published_at` and `updated_at` a day apart
-from the same page fetched anonymously.
+- `upsertFic(db, target, record)` inserts or refreshes a fic, its tags and its
+  search index entry in one transaction. It writes upstream facts only:
+  `note`, `favourite`, `status`, `chapter`, `resume_url`, `last_read_at` and
+  `state_source` survive a re-import untouched. A new fic arrives as
+  `status = 'to_read'`, `state_source = 'import'`.
+- `recordFetchFailure(db, slug, status, error)` records a `restricted`,
+  `missing` or `error` outcome against a fic already stored, leaving its facts
+  in place. A pasted URL that cannot be fetched is reported to the caller rather
+  than left behind as an empty row.
+
+The HTTP entry point and the frontend are not built yet. Scheduled enrichment
+will reuse the same fetch, parse and write path, selecting rows by
+`enriched_at` instead of a pasted URL.
+
+AO3 renders timestamps in the logged-in account's timezone. Keep the account
+behind `AO3_SESSION` set to UTC, or `published_at` and `updated_at` will land a
+day off the rest of the database.
 
 ## API
 
@@ -167,6 +178,7 @@ the race is discarded rather than overwriting fresher results.
 server/server.js   HTTP server, SQLite queries, static file serving
 server/import.js   AO3 url normalisation and fetching
 server/parse.js    AO3 work and series page parsing
+server/store.js    writing a parsed page back to the database
 server/fixtures/   captured AO3 pages used by the parser tests
 server/*.test.js   node:test suites
 public/            index.html, app.js, style.css

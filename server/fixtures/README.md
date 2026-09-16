@@ -15,11 +15,10 @@ reads sits above that point.
 
 ## Dates
 
-`work-oneshot-3694820`, `work-ongoing-47011165` and `work-coauthored-20631227`
-were fetched with `AO3_SESSION` set. AO3 renders timestamps in the logged-in
-account's timezone, so their `published_at` and `updated_at` can differ by a day
-from the same page fetched anonymously. The other two were fetched without a
-cookie.
+AO3 renders timestamps in the logged-in account's timezone. The account behind
+`AO3_SESSION` is set to UTC, so a page fetched with the cookie and the same page
+fetched anonymously agree. Changing that preference would shift `published_at`
+and `updated_at` by a day for some works.
 
 ## Refreshing
 
