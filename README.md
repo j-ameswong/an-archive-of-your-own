@@ -49,8 +49,8 @@ Columns split into three groups:
 
 - *Upstream facts* (`title`, `author`, `word_count`, `chapters_done/total`,
   `rating`, `kudos`, `bookmarks`, timestamps) — refreshed on import.
-- *Curation* (`fandom_bucket`, `note`, `favourite`) — set by hand, never
-  re-derived, so a re-import can't clobber it.
+- *Curation* (`note`, `favourite`) — set by hand, never re-derived, so a
+  re-import can't clobber it.
 - *Reading state* (`status`, `chapter`, `resume_url`, `last_read_at`) — this
   database is the system of record. `status` is one of `read`, `unfinished`,
   `dropped`, `to_read`.
@@ -73,7 +73,7 @@ migration. Nothing in `server/` reads them.
 |---|---|
 | `GET /api/fics` | `{ items, total, limit, offset }` — each item carries its `fandoms` array |
 | `GET /api/fics/:id` | one fic with `tags` grouped by type |
-| `GET /api/meta` | distinct `fandom_buckets` and per-`status` counts |
+| `GET /api/meta` | per-`status` counts |
 
 `/api/fics` query parameters:
 
@@ -81,7 +81,7 @@ migration. Nothing in `server/` reads them.
   given a trailing `*`, then ANDed, so arbitrary user text can never be an FTS5
   syntax error. Punctuation-only input matches nothing.
 - `status` — comma-separated list (OR within the list)
-- `favourite=1`, `fandom_bucket=<name>`
+- `favourite=1`
 - `sort` — `updated_at` (default), `published_at`, `word_count`, `kudos`,
   `title`; `dir` — `desc` (default) or `asc`. NULLs sort last.
 - `limit` (1–100, default 30), `offset`

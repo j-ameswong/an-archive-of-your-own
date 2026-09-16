@@ -50,12 +50,6 @@ function listFics(params) {
     where.push('favourite = 1');
   }
 
-  const bucket = params.get('fandom_bucket');
-  if (bucket) {
-    where.push('fandom_bucket = ?');
-    args.push(bucket);
-  }
-
   const q = (params.get('q') || '').trim();
   if (q) {
     const match = ftsQuery(q);
@@ -84,7 +78,7 @@ function listFics(params) {
     .prepare(
       `SELECT id, kind, title, author, word_count, chapters_done, chapters_total,
               is_complete, rating, updated_at, published_at, kudos, bookmarks,
-              favourite, status, fandom_bucket, url
+              favourite, status, url
        FROM fic
        ${whereSql}
        ORDER BY ${sortCol} IS NULL, ${sortCol} ${dir}, id ${dir}
@@ -129,20 +123,11 @@ function getFic(id) {
 }
 
 function getMeta() {
-  const buckets = db
-    .prepare(
-      `SELECT DISTINCT fandom_bucket FROM fic
-       WHERE fandom_bucket IS NOT NULL AND fandom_bucket != ''
-       ORDER BY fandom_bucket`
-    )
-    .all()
-    .map((r) => r.fandom_bucket);
-
   const statusCounts = db
     .prepare('SELECT status, COUNT(*) AS c FROM fic GROUP BY status')
     .all();
 
-  return { fandom_buckets: buckets, status_counts: statusCounts };
+  return { status_counts: statusCounts };
 }
 
 function sendJson(res, status, data) {

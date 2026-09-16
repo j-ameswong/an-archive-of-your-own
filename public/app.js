@@ -105,7 +105,7 @@ function chapterProgress(fic, unit) {
 
 // A <button> may only contain phrasing content, so these are spans, not divs.
 function cardHtml(fic) {
-  const fandoms = fic.fandoms?.length ? fic.fandoms.join(', ') : (fic.fandom_bucket || '');
+  const fandoms = fic.fandoms?.length ? fic.fandoms.join(', ') : '';
   return `
     <button class="card" data-id="${escapeHtml(fic.id)}">
       <span class="card-top">

@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS fic (
     bookmarks      INTEGER,
 
     -- set manually
-    fandom_bucket  TEXT,
     note           TEXT,
 
     favourite      INTEGER NOT NULL DEFAULT 0,
