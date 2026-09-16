@@ -93,18 +93,61 @@ body.no-scroll {
   font-size: 0.85rem;
 }
 
+.topbar-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.import-panel {
+  padding: 0.75rem 1rem 0;
+}
+
+.import-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+#importUrl {
+  /* min-width:0 so a long pasted url shrinks instead of pushing Add off-screen */
+  flex: 1;
+  min-width: 0;
+}
+
+#importSubmit {
+  flex: none;
+}
+
+.import-status {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.import-status.is-error {
+  color: var(--accent);
+}
+
 .search-row {
   padding: 0.75rem 1rem 0;
 }
 
 #search {
   width: 100%;
+}
+
+#search,
+#importUrl {
   padding: 0.6rem 0.8rem;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
   font-size: 1rem;
+}
+
+#importUrl:disabled,
+#importSubmit:disabled {
+  opacity: 0.6;
 }
 
 .filter-panel {

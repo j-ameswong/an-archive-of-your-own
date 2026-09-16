@@ -128,8 +128,8 @@ rather than through a third-party API — see
   in place. A pasted URL that cannot be fetched is reported to the caller rather
   than left behind as an empty row.
 
-`POST /api/import` ties these together; see the API table below. The frontend
-entry point is not built yet. Scheduled enrichment will reuse the same fetch,
+`POST /api/import` ties these together, and the frontend's **Import** box calls
+it; see the API table below. Scheduled enrichment will reuse the same fetch,
 parse and write path, selecting rows by `enriched_at` instead of a pasted URL.
 
 The server opens the database read-write, so a database browser left open on
@@ -180,6 +180,10 @@ imported leaves no row behind.
 
 `public/` — plain HTML, CSS and one script, no framework.
 
+- **Import** in the header opens a URL box: paste an AO3 work or series link and
+  it is fetched, saved and opened. The form locks while in flight, since a cold
+  fetch from AO3 takes seconds and imports run one at a time server-side.
+  Failures are shown in place with the reason
 - Search box (debounced 300ms), status chips, favourites toggle, sort select
 - Cursor-free pagination via **Load more**; the offset tracks what actually
   rendered, so a failed or superseded page can't leave a gap

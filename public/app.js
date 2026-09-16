@@ -14,6 +14,11 @@ const detailEl = document.getElementById('detail');
 const detailBody = document.getElementById('detailBody');
 const detailClose = document.getElementById('detailClose');
 const srStatus = document.getElementById('srStatus');
+const importToggle = document.getElementById('importToggle');
+const importPanel = document.getElementById('importPanel');
+const importUrl = document.getElementById('importUrl');
+const importSubmit = document.getElementById('importSubmit');
+const importStatus = document.getElementById('importStatus');
 
 const PAGE_SIZE = 30;
 
@@ -204,7 +209,7 @@ retryEl.addEventListener('click', () => fetchList({ reset: false }));
 
 listEl.addEventListener('click', (e) => {
   const card = e.target.closest('.card');
-  if (card) openDetail(card);
+  if (card) openDetail(card.dataset.id, card);
 });
 
 searchEl.addEventListener('input', debounce((e) => {
@@ -216,6 +221,66 @@ filterToggle.addEventListener('click', () => {
   const open = !filterPanel.hidden;
   filterPanel.hidden = open;
   filterToggle.setAttribute('aria-expanded', String(!open));
+});
+
+importToggle.addEventListener('click', () => {
+  const open = !importPanel.hidden;
+  importPanel.hidden = open;
+  importToggle.setAttribute('aria-expanded', String(!open));
+  if (!open) importUrl.focus();
+});
+
+function setImportStatus(text, isError = false) {
+  importStatus.textContent = text;
+  importStatus.classList.toggle('is-error', isError);
+  importStatus.hidden = !text;
+}
+
+function setImportBusy(on) {
+  importUrl.disabled = on;
+  importSubmit.disabled = on;
+}
+
+importPanel.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const url = importUrl.value.trim();
+  if (!url) return;
+
+  // A cold fetch from AO3 takes seconds, and imports run one at a time
+  // server-side, so lock the form rather than letting them queue up.
+  setImportBusy(true);
+  setImportStatus('Fetching from AO3…');
+
+  let res;
+  let data;
+  try {
+    res = await fetch('/api/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    data = await res.json();
+  } catch {
+    setImportBusy(false);
+    setImportStatus('Could not reach the server.', true);
+    return;
+  }
+
+  setImportBusy(false);
+
+  if (!res.ok) {
+    setImportStatus(data?.message || `Import failed (HTTP ${res.status}).`, true);
+    return;
+  }
+
+  importUrl.value = '';
+  const title = data.fic?.title || 'Untitled';
+  setImportStatus(data.created ? `Added “${title}”.` : `Refreshed “${title}”.`);
+
+  // The new fic may not pass the current filters, so refresh the counts and
+  // the list, then show it regardless.
+  await Promise.all([loadMeta(), fetchList({ reset: true })]);
+  openDetail(data.fic.id, importSubmit);
 });
 
 function setChipState(chip, on) {
@@ -258,24 +323,26 @@ const TAG_LABELS = {
 let detailSeq = 0;
 let lastFocused = null;
 
-async function openDetail(card) {
+// trigger is whatever the reader acted on -- a card, or the import button --
+// and gets focus back when the dialog closes.
+async function openDetail(id, trigger) {
   const seq = ++detailSeq;
-  card.classList.add('is-loading');
+  trigger?.classList.add('is-loading');
 
   let fic;
   try {
-    const res = await fetch(`/api/fics/${card.dataset.id}`);
+    const res = await fetch(`/api/fics/${id}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     fic = await res.json();
   } catch (err) {
     if (seq !== detailSeq) return;
-    card.classList.remove('is-loading');
-    showDetail('<p class="detail-error">Couldn’t load this fic.</p>', card);
+    trigger?.classList.remove('is-loading');
+    showDetail('<p class="detail-error">Couldn’t load this fic.</p>', trigger);
     return;
   }
 
   if (seq !== detailSeq) return;
-  card.classList.remove('is-loading');
+  trigger?.classList.remove('is-loading');
 
   const tagGroups = Object.entries(fic.tags)
     .filter(([, tags]) => tags.length)
@@ -305,7 +372,7 @@ async function openDetail(card) {
     ${href ? `<a class="detail-link" href="${escapeHtml(href)}" target="_blank" rel="noopener">
       ${fic.resume_url ? 'Continue Reading' : 'Open on AO3 →'}
     </a>` : ''}
-  `, card);
+  `, trigger);
 }
 
 // The open modal owns a history entry, so Back dismisses it instead of
@@ -387,11 +454,18 @@ async function loadMeta() {
   const counts = Object.fromEntries(meta.status_counts.map((r) => [r.status, r.c]));
   for (const chip of statusChips) {
     const n = counts[chip.dataset.status] ?? 0;
-    chip.insertAdjacentHTML('beforeend', ` <span class="chip-count">${n}</span>`);
-    if (n === 0 && !state.status.has(chip.dataset.status)) {
-      chip.disabled = true;
-      chip.title = 'No fics with this status';
+    // Reused after an import, so update the count in place rather than
+    // appending a second one.
+    let countEl = chip.querySelector('.chip-count');
+    if (!countEl) {
+      chip.insertAdjacentHTML('beforeend', ' <span class="chip-count"></span>');
+      countEl = chip.querySelector('.chip-count');
     }
+    countEl.textContent = n;
+
+    const empty = n === 0 && !state.status.has(chip.dataset.status);
+    chip.disabled = empty;
+    chip.title = empty ? 'No fics with this status' : '';
   }
 }
 

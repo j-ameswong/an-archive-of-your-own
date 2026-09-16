@@ -9,8 +9,21 @@
 <body>
   <header class="topbar">
     <h1>Archive Of <span class="accent">Your</span> Own</h1>
-    <button id="filterToggle" class="icon-btn" aria-label="Toggle filters" aria-expanded="false">Filters</button>
+    <div class="topbar-actions">
+      <button id="importToggle" class="icon-btn" aria-label="Import from AO3" aria-expanded="false" aria-controls="importPanel">Import</button>
+      <button id="filterToggle" class="icon-btn" aria-label="Toggle filters" aria-expanded="false" aria-controls="filterPanel">Filters</button>
+    </div>
   </header>
+
+  <form id="importPanel" class="import-panel" hidden>
+    <label class="sr-only" for="importUrl">AO3 work or series link</label>
+    <div class="import-row">
+      <input id="importUrl" name="url" type="text" inputmode="url" autocomplete="off"
+             placeholder="https://archiveofourown.org/works/…" />
+      <button id="importSubmit" class="icon-btn" type="submit">Add</button>
+    </div>
+    <p id="importStatus" class="import-status" role="status" aria-live="polite" hidden></p>
+  </form>
 
   <div class="search-row">
     <input id="search" type="search" aria-label="Search fics by title, author or tags" placeholder="Search title, author, tags…" autocomplete="off" />
