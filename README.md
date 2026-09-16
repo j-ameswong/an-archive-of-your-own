@@ -104,10 +104,26 @@ rather than through a third-party API — see
   `expired_session`, `missing` or `error`. Requests run one at a time, five
   seconds apart; 429 and 5xx are retried with backoff, honouring `Retry-After`.
 
-Parsing, database writes and the frontend entry point are not built yet.
-Scheduled enrichment will reuse the same fetch path, selecting rows by
+`server/parse.js` turns a fetched page into a row:
+
+- `parseWork(html)` and `parseSeries(html)` → the `fic` columns plus `tags`
+  grouped by type. They read only the metadata block at the top of a page and
+  throw if it is absent, so an upstream markup change surfaces as an error
+  rather than blanking a row.
+- A work is `is_complete` when every chapter its author promised is posted.
+  AO3 omits its "Completed:"/"Updated:" row when a work was finished the day it
+  was posted, so the chapter counts decide, not the label.
+- Series pages state no rating, kudos, chapter counts or full tag lists; those
+  come back `null` or empty.
+
+Database writes and the frontend entry point are not built yet. Scheduled
+enrichment will reuse the same fetch and parse path, selecting rows by
 `enriched_at` instead of a pasted URL, and will leave curation and reading state
 untouched.
+
+AO3 renders timestamps in the logged-in account's timezone, so a page fetched
+with `AO3_SESSION` set can report `published_at` and `updated_at` a day apart
+from the same page fetched anonymously.
 
 ## API
 
@@ -150,6 +166,8 @@ the race is discarded rather than overwriting fresher results.
 ```
 server/server.js   HTTP server, SQLite queries, static file serving
 server/import.js   AO3 url normalisation and fetching
+server/parse.js    AO3 work and series page parsing
+server/fixtures/   captured AO3 pages used by the parser tests
 server/*.test.js   node:test suites
 public/            index.html, app.js, style.css
 db/ao3_schema.sql  schema of record
