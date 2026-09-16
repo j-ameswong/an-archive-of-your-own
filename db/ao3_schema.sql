@@ -35,6 +35,16 @@ CREATE TABLE IF NOT EXISTS fic (
                         CHECK (state_source IN ('import','user')),
     state_changed_at TEXT,
 
+    -- Enrichment bookkeeping: when the upstream facts above were last
+    -- refreshed, and why the last attempt failed. NULL status = never fetched;
+    -- 'fichub' marks a row filled from the fallback, whose numbers can lag AO3
+    -- by years. Last in the table because ALTER TABLE ADD COLUMN appends, and
+    -- an existing database must end up with the column order this file
+    -- declares.
+    enriched_at    TEXT,
+    fetch_status   TEXT CHECK (fetch_status IN ('ok','restricted','missing','error','fichub')),
+    fetch_error    TEXT,
+
     UNIQUE (slug)
 );
 
@@ -45,8 +55,11 @@ CREATE TABLE IF NOT EXISTS fic_tag (
     PRIMARY KEY (fic_id, tag_type, tag)
 ) WITHOUT ROWID;
 
+-- contentless_delete lets enrichment re-index a row with
+-- DELETE ... WHERE rowid = ?; without it a delete must supply the exact old
+-- column values, which a contentless table cannot give back.
 CREATE VIRTUAL TABLE IF NOT EXISTS fic_fts USING fts5(
-    title, author, summary, tags, content=''
+    title, author, summary, tags, content='', contentless_delete=1
 );
 
 CREATE INDEX IF NOT EXISTS idx_fic_status ON fic(status);
