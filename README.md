@@ -20,8 +20,8 @@ PORT=8080 npm start    # or pick a port
 npm test
 ```
 
-The server opens the database read-only. Status, favourites and notes are edited
-directly in the database.
+The server opens the database read-write: `POST /api/import` writes. Status,
+favourites and notes are still edited directly in the database.
 
 ## Configuration
 
@@ -128,9 +128,13 @@ rather than through a third-party API — see
   in place. A pasted URL that cannot be fetched is reported to the caller rather
   than left behind as an empty row.
 
-The HTTP entry point and the frontend are not built yet. Scheduled enrichment
-will reuse the same fetch, parse and write path, selecting rows by
-`enriched_at` instead of a pasted URL.
+`POST /api/import` ties these together; see the API table below. The frontend
+entry point is not built yet. Scheduled enrichment will reuse the same fetch,
+parse and write path, selecting rows by `enriched_at` instead of a pasted URL.
+
+The server opens the database read-write, so a database browser left open on
+`db/ao3.sqlite3` can block an import. Imports wait 5 seconds for the lock and
+then answer `locked` rather than hanging.
 
 AO3 renders timestamps in the logged-in account's timezone. Keep the account
 behind `AO3_SESSION` set to UTC, or `published_at` and `updated_at` will land a
@@ -143,6 +147,23 @@ day off the rest of the database.
 | `GET /api/fics` | `{ items, total, limit, offset }` — each item carries its `fandoms` array |
 | `GET /api/fics/:id` | one fic with `tags` grouped by type |
 | `GET /api/meta` | per-`status` counts |
+| `POST /api/import` | `{ url }` → `{ fic, created }`. `201` when the fic is new, `200` when it was already stored. |
+
+A failed import answers with `{ error, message }` so the cause is actionable:
+
+| `error` | HTTP | Meaning |
+|---|---|---|
+| `bad_body` | 400 | body was not JSON with a `url` field |
+| `bad_url` | 400 | not an AO3 work or series link |
+| `expired_session` | 401 | `AO3_SESSION` no longer works; replace it and restart |
+| `restricted` | 403 | logged-in only, and no `AO3_SESSION` is set |
+| `missing` | 404 | AO3 has no such work; it may have been deleted |
+| `locked` | 503 | another program holds the database write lock |
+| `error` / `unparseable` | 502 | AO3 unreachable, or its page could not be read |
+
+For a fic already stored, a `restricted`, `missing` or `error` outcome is also
+written to its `fetch_status` and `fetch_error`. A url that has never been
+imported leaves no row behind.
 
 `/api/fics` query parameters:
 

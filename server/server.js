@@ -4,12 +4,22 @@ import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { normalizeUrl, fetchAo3 } from './import.js';
+import { parseWork, parseSeries } from './parse.js';
+import { upsertFic, recordFetchFailure } from './store.js';
+
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DB_PATH = join(ROOT, 'db', 'ao3.sqlite3');
 const PUBLIC_DIR = join(ROOT, 'public');
 const PORT = process.env.PORT || 4173;
 
-const db = new DatabaseSync(DB_PATH, { readOnly: true });
+// Read-write: /api/import writes. Reading state and curation are still edited
+// directly in the database.
+const db = new DatabaseSync(DB_PATH);
+
+// A database browser left open on the file holds a lock. Wait for it rather
+// than failing the moment it is taken.
+db.exec('PRAGMA busy_timeout = 5000');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -130,6 +140,64 @@ function getMeta() {
   return { status_counts: statusCounts };
 }
 
+// An import failure the caller can act on, rather than a 500.
+const IMPORT_ERRORS = {
+  bad_body: [400, 'Send JSON with a url field.'],
+  bad_url: [400, 'Not an AO3 work or series link.'],
+  restricted: [403, 'This work is restricted to logged-in AO3 users. Set AO3_SESSION in .env.'],
+  expired_session: [401, 'The AO3 session in .env has expired. Replace AO3_SESSION and restart.'],
+  missing: [404, 'AO3 has no such work or series. It may have been deleted.'],
+  error: [502, 'AO3 could not be reached.'],
+  locked: [503, 'The database is open in another program. Close it and try again.'],
+  unparseable: [502, 'That page could not be read. AO3 may have changed its markup.'],
+};
+
+// Bodies here are one short url; anything larger is not a request we serve.
+const MAX_BODY_BYTES = 4096;
+
+async function readJsonBody(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) throw new Error('body too large');
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+async function importFic(body) {
+  const target = normalizeUrl(body?.url);
+  if (!target) return { error: 'bad_url' };
+
+  const res = await fetchAo3(target.url);
+  if (res.status !== 'ok') {
+    // Only fics already stored get a failure recorded; a url that has never
+    // been imported must not leave an empty row behind.
+    recordFetchFailure(db, target.slug, res.status === 'expired_session' ? 'error' : res.status,
+      res.error ?? null);
+    return { error: res.status };
+  }
+
+  let record;
+  try {
+    record = target.kind === 'series' ? parseSeries(res.html) : parseWork(res.html);
+  } catch (err) {
+    recordFetchFailure(db, target.slug, 'error', err.message);
+    return { error: 'unparseable' };
+  }
+
+  try {
+    const { id, created } = upsertFic(db, target, record);
+    return { fic: getFic(id), created };
+  } catch (err) {
+    // SQLITE_BUSY: something else holds the write lock for longer than we wait.
+    if (err?.errcode === 5) return { error: 'locked' };
+    throw err;
+  }
+}
+
 function sendJson(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -165,6 +233,25 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/meta') {
       return sendJson(res, 200, getMeta());
+    }
+
+    if (url.pathname === '/api/import') {
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, { error: 'method not allowed' });
+      }
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        const [status, message] = IMPORT_ERRORS.bad_body;
+        return sendJson(res, status, { error: 'bad_body', message });
+      }
+      const result = await importFic(body);
+      if (result.error) {
+        const [status, message] = IMPORT_ERRORS[result.error];
+        return sendJson(res, status, { error: result.error, message });
+      }
+      return sendJson(res, result.created ? 201 : 200, result);
     }
 
     const detailMatch = url.pathname.match(/^\/api\/fics\/(\d+)$/);
