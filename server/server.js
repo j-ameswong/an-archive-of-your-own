@@ -12,13 +12,11 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DB_PATH = join(ROOT, 'db', 'ao3.sqlite3');
 const PUBLIC_DIR = join(ROOT, 'public');
 const PORT = process.env.PORT || 4173;
+const HOST = process.env.HOST || '127.0.0.1';
 
-// Read-write: /api/import writes. Reading state and curation are still edited
-// directly in the database.
+// Read-write: /api/import | Reading state and curation are still edited directly
 const db = new DatabaseSync(DB_PATH);
 
-// A database browser left open on the file holds a lock. Wait for it rather
-// than failing the moment it is taken.
 db.exec('PRAGMA busy_timeout = 5000');
 
 const MIME = {
@@ -272,6 +270,6 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`AO3 archive browser running at http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`AO3 archive browser running at http://${HOST}:${PORT}`);
 });

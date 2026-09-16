@@ -32,6 +32,7 @@ favourites and notes are still edited directly in the database.
 | `AO3_SESSION` | `_otwarchive_session` cookie from a logged-in AO3 session. Without it, works their authors restricted to logged-in users cannot be fetched. See [ADR-0002](docs/decisions/0002-authenticate-with-an-ao3-session-cookie.md). |
 | `ARCHIVE_CONTACT` | Contact address, sent in the `User-Agent`. AO3 asks automated clients to be contactable. |
 | `PORT` | HTTP port, default 4173. |
+| `HOST` | Interface to bind, default `127.0.0.1` (this machine only)
 | `AO3_MIN_INTERVAL_MS` | Milliseconds between AO3 requests, default 5000. `npm test` sets it to 0. |
 
 `.env` is read at process start, so replacing an expired `AO3_SESSION` needs a
