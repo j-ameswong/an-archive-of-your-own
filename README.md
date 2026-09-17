@@ -1,9 +1,10 @@
 # An Archive Of Your Own
 
 A personal, offline browser for a private AO3 reading list. You can track what
-you've read, abandoned, or are currently reading. A small Node HTTP server reads
-a local SQLite database and serves a single-page frontend for searching,
-filtering and skimming saved works and series.
+you've read, abandoned, are partway through, or are caught up on while the
+author keeps posting. A small Node HTTP server reads a local SQLite database
+and serves a single-page frontend for searching, filtering and skimming saved
+works and series.
 
 ## Requirements
 
@@ -20,8 +21,9 @@ PORT=8080 npm start    # or pick a port
 npm test
 ```
 
-The server opens the database read-write: `POST /api/import` writes. Status,
-favourites and notes are still edited directly in the database.
+The server opens the database read-write: `POST /api/import` and
+`PATCH /api/fics/:id` write. Favourites and notes are edited directly in the
+database.
 
 ## Configuration
 
@@ -42,25 +44,34 @@ work.
 
 ## Getting a database
 
-`db/*.sqlite3` is gitignored, so a fresh clone has no data. `db/ao3_schema.sql`
-is the schema of record:
+`db/*.sqlite3` is gitignored, so a fresh clone has no data. `db/schema.sql` is
+the schema of record:
 
 ```sh
-sqlite3 db/ao3.sqlite3 < db/ao3_schema.sql
+sqlite3 db/ao3.sqlite3 < db/schema.sql
 ```
 
-To bring a database created before the enrichment columns up to date:
+An older database is brought up to it by applying each migration in order, once:
+
+| File | Adds |
+|---|---|
+| `db/migrate_001.sql` | `enriched_at`, `fetch_status`, `fetch_error`, and an `fic_fts` that can be re-indexed in place |
+| `db/migrate_002.sql` | the `caught_up` reading status |
 
 ```sh
 sqlite3 db/ao3.sqlite3 < db/migrate_001.sql
+sqlite3 db/ao3.sqlite3 < db/migrate_002.sql
 ```
+
+`migrate_002.sql` rebuilds `fic`, since SQLite cannot widen a `CHECK`
+constraint in place. Back the database up before applying it.
 
 Rows are loaded into `fic`, `fic_tag` and `fic_fts` by hand; `fic_fts` has no
 sync triggers.
 
 ## Data model
 
-`db/ao3_schema.sql` — two tables and a search index.
+`db/schema.sql` — two tables and a search index.
 
 **`fic`** — one row per AO3 work or series (`kind`), keyed by `slug`. Columns
 fall into four groups:
@@ -69,9 +80,11 @@ fall into four groups:
   `rating`, `kudos`, `bookmarks`, timestamps) — refreshed on import.
 - *Curation* (`note`, `favourite`) — set by hand, never re-derived, so a
   re-import can't clobber it.
-- *Reading state* (`status`, `chapter`, `resume_url`, `last_read_at`) — this
-  database is the system of record. `status` is one of `read`, `unfinished`,
-  `dropped`, `to_read`.
+- *Reading state* (`status`, `chapter`, `resume_url`, `last_read_at`,
+  `state_source`) — this database is the system of record. `status` is one of
+  `to_read`, `unfinished`, `caught_up`, `read`, `dropped`. `state_source` is
+  `import` where the status was derived from a chapter number and `user` where
+  the reader set it by hand.
 - *Enrichment bookkeeping* (`enriched_at`, `fetch_status`, `fetch_error`) — when
   the upstream facts were last refreshed, and why the last attempt failed.
   `fetch_status` is `ok`, `restricted`, `missing` or `error`; `NULL` means never
@@ -86,8 +99,29 @@ re-indexed with `DELETE FROM fic_fts WHERE rowid = ?`. It has **no triggers**:
 rows must be written with `rowid` set to `fic.id`, which is what the search query
 joins on.
 
-`db/schema.sql` and `db/archive.sqlite3` are unused; nothing in `server/` reads
-them. See [docs/history.md](docs/history.md).
+`db/archive_schema.sql` and `db/archive.sqlite3` are unused; nothing in
+`server/` reads them. See [docs/history.md](docs/history.md).
+
+## Reading status
+
+An import derives `status` from how far into the fic the pasted link points.
+Paste a chapter deep link and it is read as where you stopped; paste a bare work
+link and it carries no position at all.
+
+| Where the link points | `status` |
+|---|---|
+| nowhere — a bare work or series link | `to_read` |
+| the first chapter | `to_read` |
+| past the first chapter, short of the last posted one | `unfinished` |
+| the last posted chapter, author still writing | `caught_up` |
+| the last posted chapter, author marked it finished | `read` |
+
+Chapter 1 counts as opened rather than started, so a one-chapter work is never
+finished automatically. `dropped` is never derived.
+
+`PATCH /api/fics/:id` overrides the derived value and sets
+`state_source = 'user'`, which stops a later import re-deriving it. See
+[ADR-0003](docs/decisions/0003-derive-reading-status-from-the-pasted-chapter-link.md).
 
 ## Import
 
@@ -97,10 +131,11 @@ rather than through a third-party API — see
 
 `server/import.js` provides:
 
-- `normalizeUrl(input)` → `{ kind, slug, url }`, or `null` for anything that is
-  not an AO3 work or series link. Chapter deep links, `?view_adult=true`,
-  fragments, collection-scoped paths and bare hostnames all collapse onto one
-  `slug`.
+- `normalizeUrl(input)` → `{ kind, slug, url, chapter_id }`, or `null` for
+  anything that is not an AO3 work or series link. Chapter deep links,
+  `?view_adult=true`, fragments, collection-scoped paths and bare hostnames all
+  collapse onto one `slug`; a chapter deep link also yields `chapter_id`, which
+  is AO3's global chapter id and says nothing about position on its own.
 - `fetchAo3(url)` → `{ status: 'ok', html, url }`, or a status of `restricted`,
   `expired_session`, `missing` or `error`. Requests run one at a time, five
   seconds apart; 429 and 5xx are retried with backoff, honouring `Retry-After`.
@@ -114,24 +149,29 @@ rather than through a third-party API — see
 - A work is `is_complete` when every chapter its author promised is posted.
   AO3 omits its "Completed:"/"Updated:" row when a work was finished the day it
   was posted, so the chapter counts decide, not the label.
+- `chapter_ids` carries the page's chapter menu in order, which is what turns a
+  `chapter_id` into a chapter number. A one-chapter work has no menu.
 - Series pages state no rating, kudos, chapter counts or full tag lists; those
   come back `null` or empty.
 
 `server/store.js` writes the result:
 
 - `upsertFic(db, target, record)` inserts or refreshes a fic, its tags and its
-  search index entry in one transaction. It writes upstream facts only:
-  `note`, `favourite`, `status`, `chapter`, `resume_url`, `last_read_at` and
-  `state_source` survive a re-import untouched. A new fic arrives as
-  `status = 'to_read'`, `state_source = 'import'`.
+  search index entry in one transaction. `note` and `favourite` survive a
+  re-import untouched.
+- Reading state is written only when the link names a chapter. That sets
+  `chapter` and `resume_url`, and re-derives `status` where
+  `state_source = 'import'`; a status the reader set by hand is left alone. A
+  link with no chapter changes no reading state at all.
+- `deriveStatus({ chapter, chapters_done, is_complete })` is the rule above, on
+  its own.
 - `recordFetchFailure(db, slug, status, error)` records a `restricted`,
   `missing` or `error` outcome against a fic already stored, leaving its facts
   in place. A pasted URL that cannot be fetched is reported to the caller rather
   than left behind as an empty row.
 
 `POST /api/import` ties these together, and the frontend's **Import** box calls
-it; see the API table below. Scheduled enrichment will reuse the same fetch,
-parse and write path, selecting rows by `enriched_at` instead of a pasted URL.
+it; see the API table below.
 
 The server opens the database read-write, so a database browser left open on
 `db/ao3.sqlite3` can block an import. Imports wait 5 seconds for the lock and
@@ -149,13 +189,15 @@ day off the rest of the database.
 | `GET /api/fics/:id` | one fic with `tags` grouped by type |
 | `GET /api/meta` | per-`status` counts |
 | `POST /api/import` | `{ url }` → `{ fic, created }`. `201` when the fic is new, `200` when it was already stored. |
+| `PATCH /api/fics/:id` | `{ status }` → the updated fic. Sets `state_source = 'user'`. |
 
-A failed import answers with `{ error, message }` so the cause is actionable:
+A failed request answers with `{ error, message }` so the cause is actionable:
 
 | `error` | HTTP | Meaning |
 |---|---|---|
-| `bad_body` | 400 | body was not JSON with a `url` field |
+| `bad_body` | 400 | body was not valid JSON |
 | `bad_url` | 400 | not an AO3 work or series link |
+| `bad_status` | 400 | not one of the five reading statuses |
 | `expired_session` | 401 | `AO3_SESSION` no longer works; replace it and restart |
 | `restricted` | 403 | logged-in only, and no `AO3_SESSION` is set |
 | `missing` | 404 | AO3 has no such work; it may have been deleted |
@@ -165,6 +207,8 @@ A failed import answers with `{ error, message }` so the cause is actionable:
 For a fic already stored, a `restricted`, `missing` or `error` outcome is also
 written to its `fetch_status` and `fetch_error`. A url that has never been
 imported leaves no row behind.
+
+Both write endpoints answer `locked` if a database browser holds the write lock.
 
 `/api/fics` query parameters:
 
@@ -192,6 +236,8 @@ imported leaves no row behind.
   view is linkable and survives reload without eating the Back button
 - Clicking a card opens a detail dialog with full tags, summary, note and a link
   to `resume_url` (*Continue Reading*) or `url`
+- The dialog's **Reading status** select overrides the derived status. A failed
+  save puts the control back and says so, leaving the row as it was
 - The open dialog owns a history entry, so Back dismisses it; focus is trapped
   and restored, and a live region announces the result count
 
@@ -208,7 +254,9 @@ server/store.js    writing a parsed page back to the database
 server/fixtures/   captured AO3 pages used by the parser tests
 server/*.test.js   node:test suites
 public/            index.html, app.js, style.css
-db/ao3_schema.sql  schema of record
+db/schema.sql      schema of record
 db/migrate_001.sql upgrade path for the enrichment columns
+db/migrate_002.sql upgrade path for the caught_up status
 docs/decisions/    architecture decision records
+docs/history.md    artefacts kept in the repository but not wired up
 ```

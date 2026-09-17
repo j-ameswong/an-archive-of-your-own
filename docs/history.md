@@ -5,8 +5,8 @@ running system.
 
 ## The multi-site schema
 
-`db/schema.sql` and `db/archive.sqlite3` describe a fic archive spanning more
-than one site. Against the current `db/ao3_schema.sql` they carry:
+`db/archive_schema.sql` and `db/archive.sqlite3` describe a fic archive spanning
+more than one site. Against the current `db/schema.sql` they carry:
 
 | Column | Purpose |
 |---|---|
