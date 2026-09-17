@@ -1,3 +1,4 @@
 archive*
 *.sqlite3
 .env
+logs/
