@@ -1,6 +1,20 @@
--- Personal AO3 archive
+-- 002: add the 'caught_up' reading status.
+--
+-- A fic whose every posted chapter has been read, but whose author has not
+-- declared it finished. Distinct from 'read' -- there is more coming -- and
+-- from 'unfinished', which means the reader stopped partway.
+--
+-- SQLite cannot widen a CHECK in place, so the table is rebuilt. Column order
+-- below is the order db/schema.sql declares and the live database already has,
+-- which is what lets INSERT ... SELECT * carry the rows across.
+--
+-- Apply once:  sqlite3 db/ao3.sqlite3 < db/migrate_002.sql
 
-CREATE TABLE IF NOT EXISTS fic (
+PRAGMA foreign_keys = off;
+
+BEGIN;
+
+CREATE TABLE fic_new (
     id             INTEGER PRIMARY KEY,
     kind           TEXT NOT NULL,     -- work|series
     slug           TEXT NOT NULL,
@@ -36,12 +50,6 @@ CREATE TABLE IF NOT EXISTS fic (
                         CHECK (state_source IN ('import','user')),
     state_changed_at TEXT,
 
-    -- Enrichment bookkeeping: when the upstream facts above were last
-    -- refreshed, and why the last attempt failed. NULL status = never fetched.
-    -- 'fichub' is unused; SQLite cannot narrow a CHECK without rebuilding the
-    -- table, so the value stays. See docs/decisions/0001-scrape-ao3-directly.md.
-    -- These columns come last because ALTER TABLE ADD COLUMN appends, and an
-    -- existing database must end up with the column order this file declares.
     enriched_at    TEXT,
     fetch_status   TEXT CHECK (fetch_status IN ('ok','restricted','missing','error','fichub')),
     fetch_error    TEXT,
@@ -49,21 +57,21 @@ CREATE TABLE IF NOT EXISTS fic (
     UNIQUE (slug)
 );
 
-CREATE TABLE IF NOT EXISTS fic_tag (
-    fic_id   INTEGER NOT NULL REFERENCES fic(id) ON DELETE CASCADE,
-    tag_type TEXT NOT NULL,          -- fandom|relationship|character|freeform|category|warning|genre
-    tag      TEXT NOT NULL,
-    PRIMARY KEY (fic_id, tag_type, tag)
-) WITHOUT ROWID;
+INSERT INTO fic_new SELECT * FROM fic;
 
--- contentless_delete lets enrichment re-index a row with
--- DELETE ... WHERE rowid = ?; without it a delete must supply the exact old
--- column values, which a contentless table cannot give back.
-CREATE VIRTUAL TABLE IF NOT EXISTS fic_fts USING fts5(
-    title, author, summary, tags, content='', contentless_delete=1
-);
+DROP TABLE fic;
+ALTER TABLE fic_new RENAME TO fic;
 
 CREATE INDEX IF NOT EXISTS idx_fic_status ON fic(status);
 CREATE INDEX IF NOT EXISTS idx_fic_fav    ON fic(favourite);
 CREATE INDEX IF NOT EXISTS idx_fic_words  ON fic(word_count);
-CREATE INDEX IF NOT EXISTS idx_tag_lookup ON fic_tag(tag_type, tag);
+
+-- Every row in the database at this point was curated by hand, long before
+-- anything derived a status from a chapter number. Marking them 'user' stops a
+-- later enrichment pass from re-deriving them: 544 of the 550 'read' rows carry
+-- no chapter, so a re-derivation would demote them all to 'to_read'.
+UPDATE fic SET state_source = 'user';
+
+COMMIT;
+
+PRAGMA foreign_keys = on;

@@ -9,6 +9,7 @@
   /* Badge text sits on a 20% tint of itself, so these are darkened from the
      original hues to clear 4.5:1 against both --surface and --bg. */
   --status-read: #455f48;
+  --status-caught_up: #4a5f6b;
   --status-unfinished: #6f5124;
   --status-to_read: #3a5782;
   --status-dropped: #5c5754;
@@ -26,6 +27,7 @@
     --accent-soft: #3a2424;
     /* Same hues lightened for the dark surface. */
     --status-read: #9bb69f;
+    --status-caught_up: #9fbecd;
     --status-unfinished: #cfa76c;
     --status-to_read: #98afd1;
     --status-dropped: #b2aeab;
@@ -284,6 +286,7 @@ select {
 }
 
 .badge.status-read { background: color-mix(in srgb, var(--status-read) 20%, transparent); color: var(--status-read); }
+.badge.status-caught_up { background: color-mix(in srgb, var(--status-caught_up) 20%, transparent); color: var(--status-caught_up); }
 .badge.status-unfinished { background: color-mix(in srgb, var(--status-unfinished) 20%, transparent); color: var(--status-unfinished); }
 .badge.status-to_read { background: color-mix(in srgb, var(--status-to_read) 20%, transparent); color: var(--status-to_read); }
 .badge.status-dropped { background: color-mix(in srgb, var(--status-dropped) 20%, transparent); color: var(--status-dropped); }
@@ -424,3 +427,26 @@ select {
   text-decoration: none;
   border-radius: 999px;
 }
+
+/* Overriding the status the import worked out. */
+.detail-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.detail-status select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+}
+
+.detail-status[aria-busy='true'] { opacity: 0.6; }
+
+.detail-status-error { color: var(--accent); }

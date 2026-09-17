@@ -93,8 +93,16 @@ function restoreFromUrl() {
   }
 }
 
+const STATUS_LABELS = {
+  to_read: 'To read',
+  unfinished: 'Unfinished',
+  caught_up: 'Caught up',
+  read: 'Read',
+  dropped: 'Dropped',
+};
+
 function statusLabel(s) {
-  return { to_read: 'To read', unfinished: 'Unfinished', read: 'Read', dropped: 'Dropped' }[s] || s;
+  return STATUS_LABELS[s] || s;
 }
 
 function fmtWords(n) {
@@ -360,12 +368,20 @@ async function openDetail(id, trigger) {
     <h2 class="detail-title">${escapeHtml(fic.title || 'Untitled')} ${fic.favourite ? '★' : ''}</h2>
     <p class="detail-author">${escapeHtml(fic.author || 'Unknown')}</p>
     <div class="card-meta" style="margin-bottom:1rem">
-      <span class="badge status-${escapeHtml(fic.status)}">${escapeHtml(statusLabel(fic.status))}</span>
+      <span class="badge status-${escapeHtml(fic.status)}" data-status-badge>${escapeHtml(statusLabel(fic.status))}</span>
       <span class="badge">${fmtWords(fic.word_count)} words</span>
       <span class="badge">${escapeHtml(progress)}</span>
       <span class="badge">${escapeHtml(fic.kudos ?? 0)} kudos</span>
       <span class="badge">${escapeHtml(fic.bookmarks ?? 0)} bookmarks</span>
     </div>
+    <label class="detail-status">
+      Reading status
+      <select data-status-for="${escapeHtml(fic.id)}" data-current="${escapeHtml(fic.status)}">
+        ${Object.entries(STATUS_LABELS).map(([value, label]) => `
+          <option value="${escapeHtml(value)}"${value === fic.status ? ' selected' : ''}>${escapeHtml(label)}</option>
+        `).join('')}
+      </select>
+    </label>
     ${fic.summary ? `<p class="detail-summary">${escapeHtml(fic.summary)}</p>` : ''}
     ${fic.note ? `<div class="detail-note">${escapeHtml(fic.note)}</div>` : ''}
     ${tagGroups}
@@ -374,6 +390,46 @@ async function openDetail(id, trigger) {
     </a>` : ''}
   `, trigger);
 }
+
+// Delegated rather than bound per render: showDetail replaces the panel's
+// markup wholesale, so there is nothing stable to bind to.
+detailBody.addEventListener('change', async (e) => {
+  const select = e.target.closest('select[data-status-for]');
+  if (!select) return;
+
+  const label = select.closest('.detail-status');
+  const previous = select.dataset.current ?? '';
+  label.querySelector('.detail-status-error')?.remove();
+  label.setAttribute('aria-busy', 'true');
+  select.disabled = true;
+
+  try {
+    const res = await fetch(`/api/fics/${select.dataset.statusFor}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: select.value }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const fic = await res.json();
+
+    select.dataset.current = fic.status;
+    const badge = detailBody.querySelector('[data-status-badge]');
+    if (badge) {
+      badge.className = `badge status-${fic.status}`;
+      badge.textContent = statusLabel(fic.status);
+    }
+    // The list and the counts both key off status, so both are now stale.
+    await Promise.all([loadMeta(), fetchList({ reset: true })]);
+  } catch {
+    // Put the control back where it was: the row did not change.
+    if (previous) select.value = previous;
+    label.insertAdjacentHTML('beforeend',
+      '<span class="detail-status-error">Couldn\u2019t save that.</span>');
+  } finally {
+    label.removeAttribute('aria-busy');
+    select.disabled = false;
+  }
+});
 
 // The open modal owns a history entry, so Back dismisses it instead of
 // leaving the app. Only popstate tears it down, keeping both paths identical.

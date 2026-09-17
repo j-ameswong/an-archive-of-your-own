@@ -112,9 +112,20 @@ function firstMatch(html, re) {
   return text(re.exec(html)?.[1]);
 }
 
+// AO3 links a chapter by a global id, not by its position, so a pasted chapter
+// link cannot say "chapter 7" on its own. The chapter menu carries the ids in
+// order, which is the mapping. A single-chapter work has no menu, and the menu
+// sits above the fic body, so the fixtures hold complete lists.
+function chapterIds(html) {
+  const menu = /<select[^>]*\bid="selected_id"[^>]*>([\s\S]*?)<\/select>/.exec(html);
+  if (!menu) return [];
+  return [...menu[1].matchAll(/<option[^>]*\bvalue="(\d+)"/g)].map((m) => m[1]);
+}
+
 /**
  * @param {string} html an AO3 work page
- * @returns a fic row, with tags grouped by type
+ * @returns a fic row, with tags grouped by type. `chapter_ids` is not a column:
+ *   it is the chapter menu, which turns a pasted chapter id into a number.
  * @throws if the page carries no work metadata block
  */
 export function parseWork(html) {
@@ -149,6 +160,7 @@ export function parseWork(html) {
     word_count: number(stats.get('Words')),
     chapters_done: chaptersDone,
     chapters_total: chaptersTotal,
+    chapter_ids: chapterIds(html),
     // A work is finished when every chapter the author promised is posted.
     is_complete: chaptersTotal !== null && chaptersDone === chaptersTotal ? 1 : 0,
     rating: tagList(tagsRegion, 'rating')[0] ?? null,
@@ -185,6 +197,7 @@ export function parseSeries(html) {
     word_count: number(fields.get('Words')),
     chapters_done: null,
     chapters_total: null,
+    chapter_ids: [],
     is_complete: /^yes$/i.test(fields.get('Complete') ?? '') ? 1 : 0,
     rating: null,
     published_at: published,

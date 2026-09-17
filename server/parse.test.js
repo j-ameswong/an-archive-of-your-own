@@ -8,7 +8,7 @@ const fixture = (name) =>
 
 test('a finished multi-chapter work', () => {
   const w = parseWork(fixture('work-complete-6623293'));
-  assert.deepEqual({ ...w, tags: undefined }, {
+  assert.deepEqual({ ...w, tags: undefined, chapter_ids: undefined }, {
     kind: 'work',
     title: 'Realignment',
     author: 'Puzzled',
@@ -27,6 +27,7 @@ test('a finished multi-chapter work', () => {
     kudos: 534,
     bookmarks: 244,
     tags: undefined,
+    chapter_ids: undefined,
   });
 });
 
@@ -112,6 +113,7 @@ test('a series', () => {
     word_count: 329946,
     chapters_done: null,
     chapters_total: null,
+    chapter_ids: [],
     is_complete: 0,
     rating: null,
     published_at: '2019-07-31',
@@ -135,4 +137,26 @@ test('a page with no metadata block throws rather than returning nulls', () => {
   // A series page is not a work page, and vice versa.
   assert.throws(() => parseWork(fixture('series-1637290')), /no work meta block/);
   assert.throws(() => parseSeries(fixture('work-complete-6623293')), /no series meta block/);
+});
+
+test('the chapter menu comes back in order, one id per posted chapter', () => {
+  const w = parseWork(fixture('work-ongoing-47011165'));
+  assert.equal(w.chapter_ids.length, w.chapters_done);
+  assert.equal(w.chapter_ids[0], '118430581');
+  assert.equal(w.chapter_ids.at(-1), '224475821');
+  // Position in this list is the chapter number; the ids themselves are not
+  // ordered, so nothing may be inferred from their values.
+  assert.equal(w.chapter_ids.indexOf('142023682') + 1, 7);
+
+  // The menu is complete even where the fic body was cut from the fixture.
+  for (const name of ['work-complete-6623293', 'work-coauthored-20631227',
+                      'work-in-series-20049589']) {
+    const other = parseWork(fixture(name));
+    assert.equal(other.chapter_ids.length, other.chapters_done, name);
+  }
+});
+
+test('a single-chapter work has no chapter menu', () => {
+  assert.deepEqual(parseWork(fixture('work-oneshot-3694820')).chapter_ids, []);
+  assert.deepEqual(parseSeries(fixture('series-1637290')).chapter_ids, []);
 });

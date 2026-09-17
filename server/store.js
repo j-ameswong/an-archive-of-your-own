@@ -1,9 +1,13 @@
 // Writing a parsed page back to the database.
 //
 // Enrichment owns the upstream facts and nothing else. Curation (note,
-// favourite) and reading state (status, chapter, resume_url, last_read_at) are
-// the reader's, and a re-import must never overwrite them -- that separation is
+// favourite) is the reader's and is never written here -- that separation is
 // the whole point of the schema.
+//
+// Reading state is the one thing in between. A pasted chapter link is the
+// reader telling us where they stopped, so an import may set chapter,
+// resume_url and a status derived from them. What it may never do is overwrite
+// a status the reader set by hand: state_source says which is which.
 
 import { TAG_TYPES } from './parse.js';
 
@@ -25,6 +29,37 @@ const FACTS = [
 ];
 
 const now = () => new Date().toISOString();
+
+/**
+ * Where an import leaves a fic, given how far into it the reader got.
+ *
+ * Chapter 1 is "opened", not "started": a bare link carries no chapter at all,
+ * and a link to chapter 1 says no more than a bare one does. A oneshot is
+ * therefore never finished automatically -- that takes a hand edit.
+ *
+ * @param {{chapter: number|null, chapters_done: number|null,
+ *   is_complete: number|null}} state
+ * @returns {'to_read'|'unfinished'|'caught_up'|'read'}
+ */
+export function deriveStatus({ chapter, chapters_done, is_complete }) {
+  if (chapter == null || chapter <= 1) return 'to_read';
+  // A series carries no chapter count of its own to be caught up with.
+  if (chapters_done == null) return 'unfinished';
+  if (chapter < chapters_done) return 'unfinished';
+  // Every posted chapter read: finished if the author is, still running if not.
+  return is_complete ? 'read' : 'caught_up';
+}
+
+// AO3 numbers chapters by a global id, so position in the page's chapter menu
+// is what turns one into a chapter number. A single-chapter work has no menu,
+// and its only chapter is the first. An id the work no longer lists -- a
+// deleted chapter, a mangled paste -- says nothing about position at all.
+function chapterNumber(record, chapterId) {
+  if (!chapterId) return null;
+  const at = (record.chapter_ids ?? []).indexOf(chapterId);
+  if (at !== -1) return at + 1;
+  return record.chapters_done === 1 ? 1 : null;
+}
 
 // Every run() reports last_insert_rowid(), and FTS5's shadow tables use rowids
 // far beyond Number.MAX_SAFE_INTEGER -- reading one as a JS number throws. Ask
@@ -80,7 +115,8 @@ function transaction(db, fn) {
  * Insert or refresh one fic, its tags and its search index entry.
  *
  * @param db an open read-write DatabaseSync
- * @param {{slug: string, url: string}} target from normalizeUrl
+ * @param {{slug: string, url: string, chapter_id?: string|null}} target
+ *   from normalizeUrl
  * @param record from parseWork or parseSeries
  * @returns {{id: number, created: boolean}}
  */
@@ -89,6 +125,15 @@ export function upsertFic(db, target, record) {
     const existing = db.prepare('SELECT id FROM fic WHERE slug = ?').get(target.slug);
     const stamp = now();
     const values = FACTS.map((c) => record[c] ?? null);
+
+    const chapter = chapterNumber(record, target.chapter_id);
+    // Only a chapter we could place is worth a resume link.
+    const resumeUrl = chapter == null ? null : `${target.url}/chapters/${target.chapter_id}`;
+    const status = deriveStatus({
+      chapter,
+      chapters_done: record.chapters_done ?? null,
+      is_complete: record.is_complete ?? null,
+    });
 
     let id;
     if (existing) {
@@ -99,17 +144,32 @@ export function upsertFic(db, target, record) {
          WHERE id = ?`
       ).run(...values, stamp, existing.id);
       id = existing.id;
+
+      // A re-import with no chapter link says nothing about reading state, so
+      // it leaves every bit of it alone. One with a chapter link is the reader
+      // recording progress -- but the status is only re-derived for a row they
+      // have not taken over, which is what the CASE guards.
+      if (chapter != null) {
+        write(
+          db,
+          `UPDATE fic
+              SET chapter = ?, resume_url = ?, state_changed_at = ?,
+                  status = CASE WHEN state_source = 'import' THEN ? ELSE status END
+            WHERE id = ?`
+        ).run(chapter, resumeUrl, stamp, status, id);
+      }
     } else {
-      // A newly imported fic is something to read, and the import said so --
-      // state_source stays 'import' until the reader touches it.
+      // state_source stays 'import' until the reader overrides the status: it
+      // is what marks a row as still safe to re-derive.
       const result = write(
         db,
         `INSERT INTO fic (kind, slug, url, ${FACTS.join(', ')},
                           enriched_at, fetch_status, favourite,
-                          status, state_source, state_changed_at)
+                          status, chapter, resume_url, state_source, state_changed_at)
          VALUES (?, ?, ?, ${FACTS.map(() => '?').join(', ')},
-                 ?, 'ok', 0, 'to_read', 'import', ?)`
-      ).run(record.kind, target.slug, target.url, ...values, stamp, stamp);
+                 ?, 'ok', 0, ?, ?, ?, 'import', ?)`
+      ).run(record.kind, target.slug, target.url, ...values, stamp,
+            status, chapter, resumeUrl, stamp);
       id = Number(result.lastInsertRowid);
     }
 

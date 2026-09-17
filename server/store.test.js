@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { upsertFic, recordFetchFailure } from './store.js';
+import { upsertFic, recordFetchFailure, deriveStatus } from './store.js';
 
-const SCHEMA = readFileSync(new URL('../db/ao3_schema.sql', import.meta.url), 'utf8');
+const SCHEMA = readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8');
 
 function freshDb() {
   const db = new DatabaseSync(':memory:');
@@ -236,4 +236,129 @@ test('writes survive a last_insert_rowid beyond the safe integer range', () => {
 
   assert.doesNotThrow(() => recordFetchFailure(db, TARGET.slug, 'error', 'later'));
   assert.equal(db.prepare('SELECT fetch_status FROM fic WHERE id = ?').get(id).fetch_status, 'error');
+});
+
+// ---------------------------------------------------------------------------
+// Reading state
+// ---------------------------------------------------------------------------
+
+test('status follows how far the reader got', () => {
+  const cases = [
+    // chapter, chapters_done, is_complete, expected
+    [null, 11, 0, 'to_read', 'a bare link carries no position'],
+    [1, 1, 1, 'to_read', 'a oneshot is opened, not finished'],
+    [1, 5, 1, 'to_read', 'chapter one is opened, not started'],
+    [2, 5, 1, 'unfinished', 'past the first chapter, short of the last'],
+    [7, 11, 0, 'unfinished', 'partway through a running fic'],
+    [11, 11, 0, 'caught_up', 'every posted chapter read, more to come'],
+    [25, 25, 1, 'read', 'every chapter read and the author is done'],
+    [12, 11, 0, 'caught_up', 'a chapter past the count is still caught up'],
+    [2, null, 0, 'unfinished', 'a series has no count to be caught up with'],
+  ];
+  for (const [chapter, chapters_done, is_complete, expected, why] of cases) {
+    assert.equal(deriveStatus({ chapter, chapters_done, is_complete }), expected, why);
+  }
+});
+
+// The ids a work's chapter menu would carry, for a work of n chapters.
+const menu = (n) => Array.from({ length: n }, (_, i) => String(9000 + i));
+const at = (chapterId) => ({ ...TARGET, chapter_id: chapterId });
+
+test('a chapter link sets the chapter, the resume link and the status', () => {
+  const db = freshDb();
+  upsertFic(db, at('9006'), record({ chapters_done: 11, chapters_total: 20,
+    is_complete: 0, chapter_ids: menu(11) }));
+
+  const fic = db.prepare('SELECT * FROM fic WHERE slug = ?').get(TARGET.slug);
+  assert.equal(fic.chapter, 7, 'position in the menu, not the id');
+  assert.equal(fic.resume_url, 'https://archiveofourown.org/works/123/chapters/9006');
+  assert.equal(fic.status, 'unfinished');
+  assert.equal(fic.state_source, 'import');
+});
+
+test('the last posted chapter is caught_up while the author is still writing', () => {
+  const db = freshDb();
+  upsertFic(db, at('9010'), record({ chapters_done: 11, chapters_total: null,
+    is_complete: 0, chapter_ids: menu(11) }));
+  assert.equal(db.prepare('SELECT status FROM fic').get().status, 'caught_up');
+});
+
+test('the last chapter of a finished work is read', () => {
+  const db = freshDb();
+  upsertFic(db, at('9024'), record({ chapters_done: 25, chapters_total: 25,
+    is_complete: 1, chapter_ids: menu(25) }));
+  assert.equal(db.prepare('SELECT status FROM fic').get().status, 'read');
+});
+
+test('a oneshot has no chapter menu, and being on it is not finishing it', () => {
+  const db = freshDb();
+  upsertFic(db, at('9000'), record({ chapters_done: 1, chapters_total: 1,
+    is_complete: 1, chapter_ids: [] }));
+  const fic = db.prepare('SELECT * FROM fic').get();
+  assert.equal(fic.chapter, 1, 'the only chapter there is');
+  assert.equal(fic.status, 'to_read');
+});
+
+test('a chapter the work no longer lists leaves no position behind', () => {
+  const db = freshDb();
+  upsertFic(db, at('4242'), record({ chapters_done: 11, chapters_total: 20,
+    is_complete: 0, chapter_ids: menu(11) }));
+  const fic = db.prepare('SELECT * FROM fic').get();
+  assert.equal(fic.chapter, null);
+  assert.equal(fic.resume_url, null, 'a link we cannot place is not a resume link');
+  assert.equal(fic.status, 'to_read');
+});
+
+test('re-importing a deeper chapter link records the progress', () => {
+  const db = freshDb();
+  const ongoing = (over) => record({ chapters_done: 11, chapters_total: null,
+    is_complete: 0, chapter_ids: menu(11), ...over });
+
+  upsertFic(db, at('9006'), ongoing());
+  upsertFic(db, at('9010'), ongoing());
+
+  const fic = db.prepare('SELECT * FROM fic').get();
+  assert.equal(fic.chapter, 11);
+  assert.equal(fic.resume_url, 'https://archiveofourown.org/works/123/chapters/9010');
+  assert.equal(fic.status, 'caught_up');
+});
+
+test('re-importing a bare link leaves reading state exactly as it was', () => {
+  const db = freshDb();
+  const ongoing = record({ chapters_done: 11, chapters_total: null,
+    is_complete: 0, chapter_ids: menu(11) });
+
+  upsertFic(db, at('9006'), ongoing);
+  const before = db.prepare('SELECT * FROM fic').get();
+
+  // The facts move on -- the author posted a twelfth chapter -- but a bare
+  // paste says nothing about where the reader is.
+  upsertFic(db, TARGET, record({ chapters_done: 12, chapters_total: null,
+    is_complete: 0, chapter_ids: menu(12), word_count: 99999 }));
+  const after = db.prepare('SELECT * FROM fic').get();
+
+  assert.equal(after.word_count, 99999, 'facts still refresh');
+  assert.equal(after.chapter, before.chapter);
+  assert.equal(after.resume_url, before.resume_url);
+  assert.equal(after.status, before.status);
+  assert.equal(after.state_changed_at, before.state_changed_at);
+});
+
+test('an import never overwrites a status the reader set by hand', () => {
+  const db = freshDb();
+  const ongoing = record({ chapters_done: 11, chapters_total: null,
+    is_complete: 0, chapter_ids: menu(11) });
+  upsertFic(db, at('9006'), ongoing);
+
+  // The reader gave up on it.
+  db.prepare("UPDATE fic SET status = 'dropped', state_source = 'user'").run();
+
+  // Later they paste a link to the last chapter anyway.
+  upsertFic(db, at('9010'), ongoing);
+
+  const fic = db.prepare('SELECT * FROM fic').get();
+  assert.equal(fic.status, 'dropped', 'their word stands');
+  assert.equal(fic.state_source, 'user');
+  assert.equal(fic.chapter, 11, 'but where they are is still a fact');
+  assert.equal(fic.resume_url, 'https://archiveofourown.org/works/123/chapters/9010');
 });

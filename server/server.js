@@ -14,7 +14,7 @@ const PUBLIC_DIR = join(ROOT, 'public');
 const PORT = process.env.PORT || 4173;
 const HOST = process.env.HOST || '127.0.0.1';
 
-// Read-write: /api/import | Reading state and curation are still edited directly
+// Read-write: /api/import, PATCH /api/fics/:id | Curation is still edited directly
 const db = new DatabaseSync(DB_PATH);
 
 db.exec('PRAGMA busy_timeout = 5000');
@@ -130,6 +130,22 @@ function getFic(id) {
   return { ...fic, tags };
 }
 
+// The five values db/schema.sql allows. Reading state is the reader's own, so
+// this is the one thing in the row they may set directly.
+const STATUSES = new Set(['to_read', 'unfinished', 'caught_up', 'read', 'dropped']);
+
+// Setting a status by hand is what flips state_source to 'user', which is how a
+// later import knows not to re-derive it from the chapter number.
+function setStatus(id, status) {
+  const result = db
+    .prepare(
+      `UPDATE fic SET status = ?, state_source = 'user', state_changed_at = ?
+       WHERE id = ?`
+    )
+    .run(status, new Date().toISOString(), id);
+  return Number(result.changes) > 0;
+}
+
 function getMeta() {
   const statusCounts = db
     .prepare('SELECT status, COUNT(*) AS c FROM fic GROUP BY status')
@@ -138,10 +154,11 @@ function getMeta() {
   return { status_counts: statusCounts };
 }
 
-// An import failure the caller can act on, rather than a 500.
+// A request failure the caller can act on, rather than a 500.
 const IMPORT_ERRORS = {
-  bad_body: [400, 'Send JSON with a url field.'],
+  bad_body: [400, 'That request body was not valid JSON.'],
   bad_url: [400, 'Not an AO3 work or series link.'],
+  bad_status: [400, 'Not a reading status.'],
   restricted: [403, 'This work is restricted to logged-in AO3 users. Set AO3_SESSION in .env.'],
   expired_session: [401, 'The AO3 session in .env has expired. Replace AO3_SESSION and restart.'],
   missing: [404, 'AO3 has no such work or series. It may have been deleted.'],
@@ -254,7 +271,34 @@ const server = createServer(async (req, res) => {
 
     const detailMatch = url.pathname.match(/^\/api\/fics\/(\d+)$/);
     if (detailMatch) {
-      const fic = getFic(Number(detailMatch[1]));
+      const id = Number(detailMatch[1]);
+
+      if (req.method === 'PATCH') {
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          const [status, message] = IMPORT_ERRORS.bad_body;
+          return sendJson(res, status, { error: 'bad_body', message });
+        }
+        if (!STATUSES.has(body?.status)) {
+          const [status, message] = IMPORT_ERRORS.bad_status;
+          return sendJson(res, status, { error: 'bad_status', message });
+        }
+        try {
+          if (!setStatus(id, body.status)) {
+            return sendJson(res, 404, { error: 'not found' });
+          }
+        } catch (err) {
+          // SQLITE_BUSY, as on import: the database is open elsewhere.
+          if (err?.errcode !== 5) throw err;
+          const [status, message] = IMPORT_ERRORS.locked;
+          return sendJson(res, status, { error: 'locked', message });
+        }
+        return sendJson(res, 200, getFic(id));
+      }
+
+      const fic = getFic(id);
       if (!fic) return sendJson(res, 404, { error: 'not found' });
       return sendJson(res, 200, fic);
     }

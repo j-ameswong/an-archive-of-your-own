@@ -7,13 +7,18 @@
 const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 
 // An optional /collections/<name> prefix, then works|series and the id.
-// Anything after the id -- /chapters/456, /navigate, /comments -- is a view of
-// the same record and is dropped.
-const AO3_PATH = /^(?:\/collections\/[^/]+)?\/(works|series)\/(\d+)(?:\/.*)?$/;
+// Anything after the id -- /navigate, /comments -- is a view of the same record
+// and is dropped. /chapters/456 is kept separately: it is not part of the
+// record's identity, but it is where the reader stopped.
+const AO3_PATH =
+  /^(?:\/collections\/[^/]+)?\/(works|series)\/(\d+)(?:\/chapters\/(\d+))?(?:\/.*)?$/;
 
 /**
- * @returns {{kind: 'work'|'series', slug: string, url: string} | null}
- *   null for anything that is not an AO3 work or series link.
+ * @returns {{kind: 'work'|'series', slug: string, url: string,
+ *   chapter_id: string|null} | null}
+ *   null for anything that is not an AO3 work or series link. chapter_id is
+ *   AO3's global chapter id, which says nothing about position on its own --
+ *   only the chapter list on the fetched page can turn it into a number.
  */
 export function normalizeUrl(input) {
   if (typeof input !== 'string') return null;
@@ -39,13 +44,16 @@ export function normalizeUrl(input) {
   const match = AO3_PATH.exec(url.pathname.replace(/\/+$/, ''));
   if (!match) return null;
 
-  const [, collection, id] = match;
+  const [, collection, id, chapterId] = match;
   const slug = `${collection}/${id}`;
+  const kind = collection === 'works' ? 'work' : 'series';
 
   return {
-    kind: collection === 'works' ? 'work' : 'series',
+    kind,
     slug,
     url: `https://archiveofourown.org/${slug}`,
+    // Series have no chapters of their own; a series page never links one.
+    chapter_id: kind === 'work' ? chapterId ?? null : null,
   };
 }
 
