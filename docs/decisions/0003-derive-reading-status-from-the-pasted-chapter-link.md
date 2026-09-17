@@ -31,9 +31,15 @@ Status follows from that number:
 | the last posted | no | `caught_up` |
 | the last posted | yes | `read` |
 
-`caught_up` is added to the status `CHECK`. `PATCH /api/fics/:id` overrides the
-derived value and sets `state_source = 'user'`, which stops a later import
-re-deriving it.
+`caught_up` is added to the status `CHECK`.
+
+The reader may set either half of this by hand through `PATCH /api/fics/:id`,
+and the two halves mean different things. A **chapter** is a position, so it
+re-derives the status and leaves `state_source = 'import'`, keeping it open to a
+later refresh. A **status** is a verdict, so it pins the value and sets
+`state_source = 'user'`, which stops a later import re-deriving it. Editing the
+chapter therefore discards an earlier hand-picked status — visibly, since both
+controls sit together in the detail panel.
 
 ## Alternatives
 
@@ -82,4 +88,19 @@ meaning for a later enrichment pass.
 - Demoting `caught_up` to `unfinished` when an author posts a new chapter is not
   part of import. It belongs to scheduled metadata refresh, which is not built.
 - Series carry no chapter counts and no chapter links, so nothing about them is
-  derived; they stay `to_read` until overridden.
+  derived; they stay `to_read` until overridden. A `chapter` is rejected on a
+  series outright.
+- A chapter set by hand clears `resume_url`. The link is built from AO3's
+  chapter id and the interface supplies only a number, so it cannot be rebuilt;
+  the alternative of persisting the id list per fic was considered and not
+  taken. Importing a chapter deep link remains the only way to get a resume
+  link, and hand-editing erodes the 80 rows that currently have one.
+- `state_source = 'import'` now also covers a status derived from a chapter the
+  reader typed. The value name is narrower than what it records; widening it
+  would mean another table rebuild, so it stays.
+- Reading position became the archive's primary chapter display, so the 484
+  rows marked `read` that carried no position were backfilled to their last
+  posted chapter — the position that status already asserts. See
+  `db/migrate_003.sql`. 165 of them are works their authors have not finished,
+  which now read as "all 47 posted chapters read, more coming"; they keep
+  `state_source = 'user'`, so nothing will re-derive them into `caught_up`.

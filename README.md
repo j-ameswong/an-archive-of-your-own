@@ -57,14 +57,18 @@ An older database is brought up to it by applying each migration in order, once:
 |---|---|
 | `db/migrate_001.sql` | `enriched_at`, `fetch_status`, `fetch_error`, and an `fic_fts` that can be re-indexed in place |
 | `db/migrate_002.sql` | the `caught_up` reading status |
+| `db/migrate_003.sql` | a reading position on fics already marked read |
 
 ```sh
 sqlite3 db/ao3.sqlite3 < db/migrate_001.sql
 sqlite3 db/ao3.sqlite3 < db/migrate_002.sql
+sqlite3 db/ao3.sqlite3 < db/migrate_003.sql
 ```
 
 `migrate_002.sql` rebuilds `fic`, since SQLite cannot widen a `CHECK`
-constraint in place. Back the database up before applying it.
+constraint in place. Back the database up before applying it. `migrate_003.sql`
+writes `chapter` on rows already marked `read` or `caught_up`, which is the
+position those statuses assert; it changes nothing else and is safe to re-run.
 
 Rows are loaded into `fic`, `fic_tag` and `fic_fts` by hand; `fic_fts` has no
 sync triggers.
@@ -119,9 +123,28 @@ link and it carries no position at all.
 Chapter 1 counts as opened rather than started, so a one-chapter work is never
 finished automatically. `dropped` is never derived.
 
-`PATCH /api/fics/:id` overrides the derived value and sets
-`state_source = 'user'`, which stops a later import re-deriving it. See
-[ADR-0003](docs/decisions/0003-derive-reading-status-from-the-pasted-chapter-link.md).
+The same rule runs on a chapter edited by hand. `PATCH /api/fics/:id` takes a
+`chapter`, a `status`, or both:
+
+- A **chapter** is a position. It re-derives the status and leaves
+  `state_source = 'import'`, so a later refresh may move the status again.
+- A **status** is a verdict. It pins the status and sets
+  `state_source = 'user'`, which stops a later import re-deriving it.
+- Sending both writes the chapter and pins the status given.
+
+A hand-set chapter clears `resume_url`. That link is built from AO3's chapter
+id, which a chapter number cannot reconstruct, so the detail panel falls back
+from *Continue Reading* to *Open on AO3*. Importing a chapter deep link is still
+the way to get one. Setting a chapter also stamps `last_read_at`; clearing it
+does not.
+
+Cards and the detail panel show that position as `chapter/chapters_done` — how
+far the reader is through what exists. `chapters_total` is the author's plan and
+is not shown; a `+` on the denominator marks a work they have not finished, so
+`7/11+` reads as chapter 7 of at least 11. A fic with no chapters at all, which
+is every series, shows no pill.
+
+See [ADR-0003](docs/decisions/0003-derive-reading-status-from-the-pasted-chapter-link.md).
 
 ## Import
 
@@ -165,6 +188,8 @@ rather than through a third-party API — see
   link with no chapter changes no reading state at all.
 - `deriveStatus({ chapter, chapters_done, is_complete })` is the rule above, on
   its own.
+- `applyReadingState(db, id, { status, chapter })` is the hand-edit path behind
+  `PATCH /api/fics/:id`, and enforces the same rule.
 - `recordFetchFailure(db, slug, status, error)` records a `restricted`,
   `missing` or `error` outcome against a fic already stored, leaving its facts
   in place. A pasted URL that cannot be fetched is reported to the caller rather
@@ -189,7 +214,7 @@ day off the rest of the database.
 | `GET /api/fics/:id` | one fic with `tags` grouped by type |
 | `GET /api/meta` | per-`status` counts |
 | `POST /api/import` | `{ url }` → `{ fic, created }`. `201` when the fic is new, `200` when it was already stored. |
-| `PATCH /api/fics/:id` | `{ status }` → the updated fic. Sets `state_source = 'user'`. |
+| `PATCH /api/fics/:id` | `{ status?, chapter? }` → the updated fic. At least one required. |
 
 A failed request answers with `{ error, message }` so the cause is actionable:
 
@@ -198,6 +223,8 @@ A failed request answers with `{ error, message }` so the cause is actionable:
 | `bad_body` | 400 | body was not valid JSON |
 | `bad_url` | 400 | not an AO3 work or series link |
 | `bad_status` | 400 | not one of the five reading statuses |
+| `bad_chapter` | 400 | not a whole chapter number this fic has, or a chapter on a series |
+| `empty_patch` | 400 | neither `status` nor `chapter` was sent |
 | `expired_session` | 401 | `AO3_SESSION` no longer works; replace it and restart |
 | `restricted` | 403 | logged-in only, and no `AO3_SESSION` is set |
 | `missing` | 404 | AO3 has no such work; it may have been deleted |
@@ -230,14 +257,18 @@ Both write endpoints answer `locked` if a database browser holds the write lock.
   fetch from AO3 takes seconds and imports run one at a time server-side.
   Failures are shown in place with the reason
 - Search box (debounced 300ms), status chips, favourites toggle, sort select
+- Each card carries a reading-progress pill, `7/11+ ch`, rather than the
+  author's chapter plan
 - Cursor-free pagination via **Load more**; the offset tracks what actually
   rendered, so a failed or superseded page can't leave a gap
 - Filters are mirrored into the query string with `replaceState`, so a filtered
   view is linkable and survives reload without eating the Back button
 - Clicking a card opens a detail dialog with full tags, summary, note and a link
   to `resume_url` (*Continue Reading*) or `url`
-- The dialog's **Reading status** select overrides the derived status. A failed
-  save puts the control back and says so, leaving the row as it was
+- The dialog's **Reading status** select overrides the derived status, and
+  **Chapter reached** sets the position and lets the status follow from it. The
+  chapter box is shown only for multi-chapter works. A failed save puts the
+  control back and says so, leaving the row as it was
 - The open dialog owns a history entry, so Back dismisses it; focus is trapped
   and restored, and a live region announces the result count
 
@@ -257,6 +288,7 @@ public/            index.html, app.js, style.css
 db/schema.sql      schema of record
 db/migrate_001.sql upgrade path for the enrichment columns
 db/migrate_002.sql upgrade path for the caught_up status
+db/migrate_003.sql backfill of reading position on read fics
 docs/decisions/    architecture decision records
 docs/history.md    artefacts kept in the repository but not wired up
 ```

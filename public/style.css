@@ -428,17 +428,19 @@ select {
   border-radius: 999px;
 }
 
-/* Overriding the status the import worked out. */
-.detail-status {
+/* Overriding the reading state the import worked out. */
+.detail-status,
+.detail-chapter {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
   font-size: 0.85rem;
   color: var(--text-muted);
 }
 
-.detail-status select {
+.detail-status select,
+.detail-chapter input {
   font: inherit;
   color: var(--text);
   background: var(--bg);
@@ -447,6 +449,12 @@ select {
   padding: 0.25rem 0.4rem;
 }
 
-.detail-status[aria-busy='true'] { opacity: 0.6; }
+/* Wide enough for a three-digit chapter; the longest work here has 234. */
+.detail-chapter input { width: 5rem; }
+
+.detail-chapter-of { color: var(--text-muted); }
+
+.detail-status[aria-busy='true'],
+.detail-chapter[aria-busy='true'] { opacity: 0.6; }
 
 .detail-status-error { color: var(--accent); }

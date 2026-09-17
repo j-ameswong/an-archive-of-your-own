@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { normalizeUrl, fetchAo3 } from './import.js';
 import { parseWork, parseSeries } from './parse.js';
-import { upsertFic, recordFetchFailure } from './store.js';
+import { upsertFic, recordFetchFailure, applyReadingState } from './store.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DB_PATH = join(ROOT, 'db', 'ao3.sqlite3');
@@ -86,7 +86,7 @@ function listFics(params) {
     .prepare(
       `SELECT id, kind, title, author, word_count, chapters_done, chapters_total,
               is_complete, rating, updated_at, published_at, kudos, bookmarks,
-              favourite, status, url
+              favourite, status, chapter, url
        FROM fic
        ${whereSql}
        ORDER BY ${sortCol} IS NULL, ${sortCol} ${dir}, id ${dir}
@@ -134,16 +134,16 @@ function getFic(id) {
 // this is the one thing in the row they may set directly.
 const STATUSES = new Set(['to_read', 'unfinished', 'caught_up', 'read', 'dropped']);
 
-// Setting a status by hand is what flips state_source to 'user', which is how a
-// later import knows not to re-derive it from the chapter number.
-function setStatus(id, status) {
-  const result = db
-    .prepare(
-      `UPDATE fic SET status = ?, state_source = 'user', state_changed_at = ?
-       WHERE id = ?`
-    )
-    .run(status, new Date().toISOString(), id);
-  return Number(result.changes) > 0;
+// A chapter is a whole number of chapters into the work, or null for "nowhere".
+// An out-of-range value is a typo; clamping one would record a reading position
+// the reader never gave.
+function validChapter(value, row) {
+  // A series has no chapters of its own, however far into it the reader is.
+  if (row.kind === 'series') return false;
+  if (value === null) return true;
+  if (!Number.isInteger(value) || value < 1) return false;
+  // A work that has never been enriched has no count to check against.
+  return row.chapters_done == null || value <= row.chapters_done;
 }
 
 function getMeta() {
@@ -159,6 +159,8 @@ const IMPORT_ERRORS = {
   bad_body: [400, 'That request body was not valid JSON.'],
   bad_url: [400, 'Not an AO3 work or series link.'],
   bad_status: [400, 'Not a reading status.'],
+  bad_chapter: [400, 'Not a chapter number for this fic.'],
+  empty_patch: [400, 'Send a status or a chapter.'],
   restricted: [403, 'This work is restricted to logged-in AO3 users. Set AO3_SESSION in .env.'],
   expired_session: [401, 'The AO3 session in .env has expired. Replace AO3_SESSION and restart.'],
   missing: [404, 'AO3 has no such work or series. It may have been deleted.'],
@@ -281,19 +283,29 @@ const server = createServer(async (req, res) => {
           const [status, message] = IMPORT_ERRORS.bad_body;
           return sendJson(res, status, { error: 'bad_body', message });
         }
-        if (!STATUSES.has(body?.status)) {
-          const [status, message] = IMPORT_ERRORS.bad_status;
-          return sendJson(res, status, { error: 'bad_status', message });
-        }
+        // A JSON body may be any value; only an object can carry these keys.
+        const patch = body && typeof body === 'object' ? body : {};
+        const fail = (error) => {
+          const [status, message] = IMPORT_ERRORS[error];
+          return sendJson(res, status, { error, message });
+        };
+
+        const setsStatus = 'status' in patch;
+        const setsChapter = 'chapter' in patch;
+        if (!setsStatus && !setsChapter) return fail('empty_patch');
+        if (setsStatus && !STATUSES.has(patch.status)) return fail('bad_status');
+
+        // The chapter is checked against this fic, so the row is needed first.
+        const row = db.prepare('SELECT kind, chapters_done FROM fic WHERE id = ?').get(id);
+        if (!row) return sendJson(res, 404, { error: 'not found' });
+        if (setsChapter && !validChapter(patch.chapter, row)) return fail('bad_chapter');
+
         try {
-          if (!setStatus(id, body.status)) {
-            return sendJson(res, 404, { error: 'not found' });
-          }
+          applyReadingState(db, id, patch);
         } catch (err) {
           // SQLITE_BUSY, as on import: the database is open elsewhere.
           if (err?.errcode !== 5) throw err;
-          const [status, message] = IMPORT_ERRORS.locked;
-          return sendJson(res, status, { error: 'locked', message });
+          return fail('locked');
         }
         return sendJson(res, 200, getFic(id));
       }

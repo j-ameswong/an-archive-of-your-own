@@ -180,6 +180,55 @@ export function upsertFic(db, target, record) {
 }
 
 /**
+ * Set reading state by hand, from the reader rather than from a page.
+ *
+ * A chapter is a position, not a verdict: giving one re-derives the status and
+ * hands it back to the import path, so a later refresh may move it again.
+ * Giving a status pins it. Giving both writes the chapter and pins the status.
+ *
+ * `resume_url` is a deep link built from AO3's chapter id, and a chapter
+ * number cannot rebuild one, so a hand-set chapter clears it. Pasting a chapter
+ * link on import remains the way to get one.
+ *
+ * @param {{status?: string, chapter?: number|null}} patch validated by the
+ *   caller; an absent key means "leave this alone".
+ * @returns {boolean} whether a row was updated
+ */
+export function applyReadingState(db, id, patch) {
+  const row = db
+    .prepare('SELECT chapter, chapters_done, is_complete FROM fic WHERE id = ?')
+    .get(id);
+  if (!row) return false;
+
+  const setsChapter = patch.chapter !== undefined;
+  const chapter = setsChapter ? patch.chapter : row.chapter;
+  const status = patch.status
+    ?? deriveStatus({
+      chapter,
+      chapters_done: row.chapters_done ?? null,
+      is_complete: row.is_complete ?? null,
+    });
+
+  const stamp = now();
+  const columns = ['status = ?', 'state_source = ?', 'state_changed_at = ?'];
+  const values = [status, patch.status ? 'user' : 'import', stamp];
+
+  if (setsChapter) {
+    columns.push('chapter = ?', 'resume_url = NULL');
+    values.push(chapter);
+    // Clearing a position is not a reading event.
+    if (chapter !== null) {
+      columns.push('last_read_at = ?');
+      values.push(stamp);
+    }
+  }
+
+  const result = write(db, `UPDATE fic SET ${columns.join(', ')} WHERE id = ?`)
+    .run(...values, id);
+  return Number(result.changes) > 0;
+}
+
+/**
  * Record that a fetch failed, without disturbing the facts already stored.
  * Only touches a fic already in the database: a pasted url that cannot be
  * fetched is reported to the caller rather than left as an empty row.

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { upsertFic, recordFetchFailure, deriveStatus } from './store.js';
+import { upsertFic, recordFetchFailure, deriveStatus, applyReadingState } from './store.js';
 
 const SCHEMA = readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8');
 
@@ -361,4 +361,95 @@ test('an import never overwrites a status the reader set by hand', () => {
   assert.equal(fic.state_source, 'user');
   assert.equal(fic.chapter, 11, 'but where they are is still a fact');
   assert.equal(fic.resume_url, 'https://archiveofourown.org/works/123/chapters/9010');
+});
+
+// ---------------------------------------------------------------------------
+// Editing reading state by hand
+// ---------------------------------------------------------------------------
+
+// A running fic, eleven chapters posted, imported at chapter six.
+function partwayThrough() {
+  const db = freshDb();
+  upsertFic(db, at('9005'), record({ chapters_done: 11, chapters_total: null,
+    is_complete: 0, chapter_ids: menu(11) }));
+  return db;
+}
+
+const readFic = (db) => db.prepare('SELECT * FROM fic').get();
+
+test('setting a chapter re-derives the status and hands it back to import', () => {
+  const db = partwayThrough();
+  db.prepare("UPDATE fic SET status = 'dropped', state_source = 'user'").run();
+
+  applyReadingState(db, readFic(db).id, { chapter: 11 });
+
+  const fic = readFic(db);
+  assert.equal(fic.chapter, 11);
+  assert.equal(fic.status, 'caught_up', 'the position decides, not the old pick');
+  assert.equal(fic.state_source, 'import', 'and it stays re-derivable');
+});
+
+test('setting a status pins it', () => {
+  const db = partwayThrough();
+  applyReadingState(db, readFic(db).id, { status: 'dropped' });
+
+  const fic = readFic(db);
+  assert.equal(fic.status, 'dropped');
+  assert.equal(fic.state_source, 'user');
+  assert.equal(fic.chapter, 6, 'a status says nothing about position');
+});
+
+test('setting both writes the chapter and pins the status given', () => {
+  const db = partwayThrough();
+  applyReadingState(db, readFic(db).id, { chapter: 3, status: 'dropped' });
+
+  const fic = readFic(db);
+  assert.equal(fic.chapter, 3);
+  assert.equal(fic.status, 'dropped', 'not the unfinished the chapter would give');
+  assert.equal(fic.state_source, 'user');
+});
+
+test('a hand-set chapter clears the resume link', () => {
+  const db = partwayThrough();
+  assert.ok(readFic(db).resume_url, 'the import left one');
+
+  applyReadingState(db, readFic(db).id, { chapter: 7 });
+  assert.equal(readFic(db).resume_url, null, 'a number cannot rebuild a deep link');
+});
+
+test('clearing the chapter empties the position without marking it read', () => {
+  const db = partwayThrough();
+  const id = readFic(db).id;
+  applyReadingState(db, id, { chapter: 7 });
+  const readAt = readFic(db).last_read_at;
+  assert.ok(readAt, 'reaching a chapter is a reading event');
+
+  applyReadingState(db, id, { chapter: null });
+
+  const fic = readFic(db);
+  assert.equal(fic.chapter, null);
+  assert.equal(fic.status, 'to_read');
+  assert.equal(fic.resume_url, null);
+  assert.equal(fic.last_read_at, readAt, 'clearing a position is not reading');
+});
+
+test('a status-only edit never stamps last_read_at', () => {
+  const db = partwayThrough();
+  db.prepare('UPDATE fic SET last_read_at = NULL').run();
+
+  applyReadingState(db, readFic(db).id, { status: 'dropped' });
+  assert.equal(readFic(db).last_read_at, null, 'giving up on a fic is not reading it');
+});
+
+test('the last chapter of a finished work is read, by hand as on import', () => {
+  const db = freshDb();
+  upsertFic(db, TARGET, record({ chapters_done: 25, chapters_total: 25,
+    is_complete: 1, chapter_ids: menu(25) }));
+
+  applyReadingState(db, readFic(db).id, { chapter: 25 });
+  assert.equal(readFic(db).status, 'read');
+});
+
+test('editing a fic that is not there reports it rather than throwing', () => {
+  assert.equal(applyReadingState(freshDb(), 999, { status: 'read' }), false);
 });

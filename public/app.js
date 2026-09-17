@@ -111,14 +111,30 @@ function fmtWords(n) {
   return String(n);
 }
 
+// Only a multi-chapter work has a reading position worth editing: a series has
+// no chapters of its own, and a oneshot has exactly one possible answer.
+function hasChapters(fic) {
+  return fic.kind === 'work' && (fic.chapters_done ?? 0) > 1;
+}
+
+// How far the reader is through what exists -- not how far the author is
+// through their plan, which is theirs and not the reader's business. A fic with
+// no chapters at all, which is every series, has nothing to show.
+//
+// `+` marks a work the author has not finished, so the denominator reads as
+// "at least this many". It is the one thing chapters_total was carrying that a
+// reader actually wants while browsing: is there an end to this yet.
 function chapterProgress(fic, unit) {
-  const done = fic.chapters_done ?? '?';
-  return `${done}/${fic.chapters_total ?? '?'} ${unit}`;
+  if (fic.chapter == null && fic.chapters_done == null) return null;
+  if (fic.chapters_done == null) return `${fic.chapter}/? ${unit}`;
+  const more = fic.is_complete ? '' : '+';
+  return `${fic.chapter ?? 0}/${fic.chapters_done}${more} ${unit}`;
 }
 
 // A <button> may only contain phrasing content, so these are spans, not divs.
 function cardHtml(fic) {
   const fandoms = fic.fandoms?.length ? fic.fandoms.join(', ') : '';
+  const progress = chapterProgress(fic, 'ch');
   return `
     <button class="card" data-id="${escapeHtml(fic.id)}">
       <span class="card-top">
@@ -130,7 +146,7 @@ function cardHtml(fic) {
       <span class="card-meta">
         <span class="badge status-${escapeHtml(fic.status)}">${escapeHtml(statusLabel(fic.status))}</span>
         <span class="badge">${fmtWords(fic.word_count)} words</span>
-        <span class="badge">${escapeHtml(chapterProgress(fic, 'ch'))}</span>
+        ${progress ? `<span class="badge">${escapeHtml(progress)}</span>` : ''}
       </span>
     </button>
   `;
@@ -370,7 +386,7 @@ async function openDetail(id, trigger) {
     <div class="card-meta" style="margin-bottom:1rem">
       <span class="badge status-${escapeHtml(fic.status)}" data-status-badge>${escapeHtml(statusLabel(fic.status))}</span>
       <span class="badge">${fmtWords(fic.word_count)} words</span>
-      <span class="badge">${escapeHtml(progress)}</span>
+      <span class="badge" data-progress-badge${progress ? '' : ' hidden'}>${escapeHtml(progress ?? '')}</span>
       <span class="badge">${escapeHtml(fic.kudos ?? 0)} kudos</span>
       <span class="badge">${escapeHtml(fic.bookmarks ?? 0)} bookmarks</span>
     </div>
@@ -382,54 +398,102 @@ async function openDetail(id, trigger) {
         `).join('')}
       </select>
     </label>
+    ${hasChapters(fic) ? `
+      <label class="detail-chapter">
+        Chapter reached
+        <input type="number" min="1" max="${escapeHtml(fic.chapters_done)}"
+               data-chapter-for="${escapeHtml(fic.id)}"
+               data-current="${escapeHtml(fic.chapter ?? '')}"
+               value="${escapeHtml(fic.chapter ?? '')}">
+        <span class="detail-chapter-of">of ${escapeHtml(fic.chapters_done)}</span>
+      </label>` : ''}
     ${fic.summary ? `<p class="detail-summary">${escapeHtml(fic.summary)}</p>` : ''}
     ${fic.note ? `<div class="detail-note">${escapeHtml(fic.note)}</div>` : ''}
     ${tagGroups}
-    ${href ? `<a class="detail-link" href="${escapeHtml(href)}" target="_blank" rel="noopener">
-      ${fic.resume_url ? 'Continue Reading' : 'Open on AO3 →'}
-    </a>` : ''}
+    ${href ? `<a class="detail-link" href="${escapeHtml(href)}" target="_blank" rel="noopener"
+       data-resume-link>${fic.resume_url ? 'Continue Reading' : 'Open on AO3 →'}</a>` : ''}
   `, trigger);
 }
 
-// Delegated rather than bound per render: showDetail replaces the panel's
-// markup wholesale, so there is nothing stable to bind to.
-detailBody.addEventListener('change', async (e) => {
-  const select = e.target.closest('select[data-status-for]');
-  if (!select) return;
+// The panel's markup is replaced wholesale on every open, so both controls are
+// reached by delegation rather than bound per render.
+detailBody.addEventListener('change', (e) => {
+  const control = e.target.closest('[data-status-for], [data-chapter-for]');
+  if (!control) return;
 
-  const label = select.closest('.detail-status');
-  const previous = select.dataset.current ?? '';
+  if (control.dataset.chapterFor === undefined) {
+    return saveReadingState(control, control.dataset.statusFor, { status: control.value });
+  }
+  // An empty box means "nowhere", which is a position like any other.
+  const raw = control.value.trim();
+  return saveReadingState(control, control.dataset.chapterFor,
+    { chapter: raw === '' ? null : Number(raw) });
+});
+
+// The response carries the whole fic, so the panel is brought back into line
+// from it rather than from a second copy of the derivation rules here.
+function repaintDetail(fic) {
+  const badge = detailBody.querySelector('[data-status-badge]');
+  if (badge) {
+    badge.className = `badge status-${fic.status}`;
+    badge.textContent = statusLabel(fic.status);
+  }
+
+  const select = detailBody.querySelector('[data-status-for]');
+  if (select) {
+    select.value = fic.status;
+    select.dataset.current = fic.status;
+  }
+
+  // Editing the chapter moves the progress pill too.
+  const progress = detailBody.querySelector('[data-progress-badge]');
+  if (progress) {
+    const text = chapterProgress(fic, 'chapters');
+    progress.textContent = text ?? '';
+    progress.hidden = text == null;
+  }
+
+  const input = detailBody.querySelector('[data-chapter-for]');
+  if (input) {
+    input.value = fic.chapter ?? '';
+    input.dataset.current = fic.chapter ?? '';
+  }
+
+  // Editing a chapter by hand drops the deep link, so the action changes too.
+  const link = detailBody.querySelector('[data-resume-link]');
+  const href = safeUrl(fic.resume_url || fic.url);
+  if (link && href) {
+    link.href = href;
+    link.textContent = fic.resume_url ? 'Continue Reading' : 'Open on AO3 →';
+  }
+}
+
+async function saveReadingState(control, id, patch) {
+  const label = control.closest('label');
   label.querySelector('.detail-status-error')?.remove();
   label.setAttribute('aria-busy', 'true');
-  select.disabled = true;
+  control.disabled = true;
 
   try {
-    const res = await fetch(`/api/fics/${select.dataset.statusFor}`, {
+    const res = await fetch(`/api/fics/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: select.value }),
+      body: JSON.stringify(patch),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const fic = await res.json();
-
-    select.dataset.current = fic.status;
-    const badge = detailBody.querySelector('[data-status-badge]');
-    if (badge) {
-      badge.className = `badge status-${fic.status}`;
-      badge.textContent = statusLabel(fic.status);
-    }
+    repaintDetail(await res.json());
     // The list and the counts both key off status, so both are now stale.
     await Promise.all([loadMeta(), fetchList({ reset: true })]);
   } catch {
     // Put the control back where it was: the row did not change.
-    if (previous) select.value = previous;
+    control.value = control.dataset.current ?? '';
     label.insertAdjacentHTML('beforeend',
       '<span class="detail-status-error">Couldn\u2019t save that.</span>');
   } finally {
     label.removeAttribute('aria-busy');
-    select.disabled = false;
+    control.disabled = false;
   }
-});
+}
 
 // The open modal owns a history entry, so Back dismisses it instead of
 // leaving the app. Only popstate tears it down, keeping both paths identical.
