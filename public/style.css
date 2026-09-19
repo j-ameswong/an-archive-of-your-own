@@ -6,8 +6,8 @@
   --border: #e7e3df;
   --accent: #8b3a3a;
   --accent-soft: #f3e6e6;
-  /* Badge text sits on a 20% tint of itself, so these are darkened from the
-     original hues to clear 4.5:1 against both --surface and --bg. */
+  /* Badge text uses a 20% tint of its own colour as the background.
+     Maintain at least 4.5:1 contrast over both --surface and --bg. */
   --status-read: #455f48;
   --status-caught_up: #4a5f6b;
   --status-unfinished: #6f5124;
@@ -473,7 +473,7 @@ select {
   padding: 0.25rem 0.4rem;
 }
 
-/* Wide enough for a three-digit chapter; the longest work here has 234. */
+/* Wide enough for a three-digit chapter number. */
 .detail-chapter input { width: 5rem; }
 
 .detail-chapter-of { color: var(--text-muted); }

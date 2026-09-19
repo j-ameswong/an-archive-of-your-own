@@ -61,9 +61,8 @@ export function normalizeUrl(input) {
 // Fetching
 // ---------------------------------------------------------------------------
 
-// AO3 asks clients to space requests out. One at a time, five seconds apart, is
-// well under anything they throttle, and the whole archive is only ~670 rows.
-// Overridable so the test suite doesn't sit through the real pacing.
+// Requests run one at a time, five seconds apart by default.
+// Tests override the interval to avoid waiting between requests.
 const MIN_INTERVAL_MS = Number(process.env.AO3_MIN_INTERVAL_MS ?? 5000);
 const TIMEOUT_MS = 30_000;
 const MAX_ATTEMPTS = 3;

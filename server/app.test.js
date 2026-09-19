@@ -141,8 +141,7 @@ test('search terms are ANDed', async () => {
   assert.equal((await api('/api/fics?q=Wodehouse+Discworld')).body.total, 0);
 });
 
-// The reason ftsQuery exists: none of these is a valid FTS5 expression, and
-// each used to be a 500 rather than a result.
+// Search input containing punctuation or FTS5 operators must not cause errors.
 test('punctuation and FTS5 operators are searched for, not obeyed', async () => {
   reset();
   for (const q of ['AND', 'NOT', '"', '*', '-', 'a:b', '(', 'OR alpha']) {

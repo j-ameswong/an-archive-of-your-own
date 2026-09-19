@@ -16,28 +16,14 @@ HTML/CSS/JavaScript frontend. There are no package dependencies or build steps.
 
 ## Project status
 
-**Complete and retired.** This prototype helped work through a few design
-questions before planning a larger project with support for more sites. It
-works and has a test suite, but is no longer being developed.
-
-The main lessons were:
-
-- **A chapter link can tell us the reading status.** The chapter you paste is
-  usually enough to work out whether you've started, caught up or finished.
-  You can still set a status yourself. See [ADR-0003](docs/decisions/0003-derive-reading-status-from-the-pasted-chapter-link.md).
-- **Fetching directly from AO3 is practical, but needs care.** Requests run one
-  at a time, and the parser reports an error if expected metadata is missing.
-  See [ADR-0001](docs/decisions/0001-scrape-ao3-directly.md).
-- **Refreshing a fic must preserve the reader's choices.** Imports update AO3
-  metadata without changing your notes, favourites or manually chosen status.
-
-[What I would do differently](#what-i-would-do-differently) covers the remaining
-limitations and lessons for a rewrite.
+**Complete and retired.** This project is not under active development.
+See the [prototype retrospective](docs/retrospective.md) for its goals,
+findings and lessons for a rewrite.
 
 ## Quick start
 
 You'll need **Node.js 24 or later** and the **`sqlite3` command-line tool**.
-The app was developed on Node.js 26 and uses Node's built-in SQLite support.
+The app uses Node's built-in SQLite support.
 
 From the project directory, create an empty archive and start the server:
 
@@ -189,8 +175,8 @@ The server waits five seconds for a lock before returning this error.
 `state_source` is `import` when the status can be calculated from the chapter
 position, and `user` when the reader has chosen a status manually.
 `fetch_status` is `ok`, `restricted`, `missing` or `error`; `NULL` means the
-entry has never been fetched. The schema also retains an unused legacy value,
-`fichub`.
+entry has never been fetched. The schema accepts `fichub`, but no code writes
+that value. See [ADR-0001](docs/decisions/0001-scrape-ao3-directly.md).
 
 **`fic_tag`** stores `(fic_id, tag_type, tag)`. Tag types are `fandom`,
 `relationship`, `character`, `freeform`, `category`, `warning` and `genre`.
@@ -201,9 +187,8 @@ aren't indexed. The index is contentless (`content=''`) with
 There are no triggers: the store code maintains the index and must set each
 `rowid` to the matching `fic.id` for search joins to work.
 
-[`db/archive_schema.sql`](db/archive_schema.sql) is an earlier schema for
-multiple sites. It's kept for historical context and isn't used by the server.
-See [the project history](docs/history.md).
+The server uses `db/schema.sql` only. Unused schema files are documented in
+[the project history](docs/history.md).
 
 ### Import pipeline
 
@@ -355,43 +340,32 @@ Parser tests use six captured pages, trimmed to remove story text. See the
 ## Project layout
 
 ```text
-server/server.js   Startup, database connection and access log
-server/app.js      HTTP routes, validation and queries
-server/import.js   AO3 URL normalisation and fetching
-server/parse.js    Work and series page parsing
-server/store.js    Database writes
-server/fixtures/   Captured pages for parser tests
-server/*.test.js   Test suites
-public/           HTML, JavaScript and CSS
-db/schema.sql     Current schema
-db/migrate_00*.sql Database migrations, applied in order
-docs/decisions/   Architecture decision records
-docs/history.md   Notes on files kept for historical context
-docs/img/         README screenshots
+server/server.js       Startup, database connection and access log
+server/app.js          HTTP routes, validation and queries
+server/import.js       AO3 URL normalisation and fetching
+server/parse.js        Work and series page parsing
+server/store.js        Database writes
+server/fixtures/       Captured pages for parser tests
+server/*.test.js       Test suites
+public/                HTML, JavaScript and CSS
+db/schema.sql          Current schema
+db/migrate_00*.sql     Database migrations, applied in order
+docs/decisions/        Architecture decision records
+docs/history.md        Notes on files kept for historical context
+docs/retrospective.md  Prototype findings and lessons
+docs/img/              README screenshots
 ```
 
-## What I would do differently
+## Known limitations
 
-A few things I'd change if I were building this again:
-
-- **Keep the search index in sync automatically.** `store.js` re-indexes each
-  fic on import, but nothing in the database enforces that. SQLite triggers
-  would make it harder to forget an index update.
-- **Refresh stale entries.** New chapters appear only after you re-import a
-  fic. `enriched_at` records fetch attempts but is never used to schedule
-  updates. That's manageable for a personal list, but less useful as it grows.
-- **Make each edit a single transaction.** `PATCH` validates everything first,
-  then writes reading state and notes/favourites separately. A crash between
-  those writes could leave an edit partly saved.
-- **Remove the unused `fichub` fetch status.** It remains in the schema because
-  removing it would require rebuilding the table, and didn't justify another
-  migration for this prototype.
-- **Clarify the static-file safety checks.** The path-traversal check in
-  `serveStatic` is unreachable because the URL parser resolves dot segments
-  first, including `%2e%2e`. Leaving it there makes its role misleading.
-- **Plan for AO3 markup changes.** The parser reports missing metadata instead
-  of saving blanks, but imports can still break without warning. Captured
-  fixtures test known pages; they can't tell us when the live site changes.
+- Metadata refreshes only when you re-import a fic; there is no scheduled
+  refresh. Importing a bare work link leaves reading progress unchanged.
+- Reading state and notes/favourites are saved separately. Validation happens
+  before either write, but a crash between them can leave a partial update.
+- Search indexing depends on `server/store.js`. Direct database edits must
+  update `fic_fts` too.
+- AO3 markup changes can break imports. Parser tests use captured pages and
+  don't check the live site.
 
 ## Licence
 

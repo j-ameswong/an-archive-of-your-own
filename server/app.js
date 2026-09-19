@@ -27,10 +27,8 @@ const SORT_COLUMNS = {
   title: 'title',
 };
 
-// User input is never a valid FTS5 expression on its own: bare -, *, ", :, (
-// and the AND/OR/NOT keywords are all operators and raise a syntax error.
-// Keep only letter/digit runs and quote each one, so every term is a literal.
-// Trailing * keeps prefix matching, which LIKE '%q%' used to give for free.
+// Treat user input as literal search terms, not FTS5 syntax. Keep letter/digit
+// runs, quote each term and append * for prefix matching. All terms must match.
 function ftsQuery(q) {
   const terms = q.match(/[\p{L}\p{N}]+/gu);
   if (!terms) return null;
@@ -58,8 +56,7 @@ function listFics(db, params) {
       where.push('id IN (SELECT rowid FROM fic_fts WHERE fic_fts MATCH ?)');
       args.push(match);
     } else {
-      // q was punctuation only: no searchable term, so match nothing,
-      // as the old LIKE '%q%' did rather than returning everything.
+      // Punctuation-only input has no searchable terms and matches nothing.
       where.push('0');
     }
   }
@@ -302,8 +299,7 @@ export function createApp(db) {
             return fail('empty_patch');
           }
           if (setsStatus && !STATUSES.has(patch.status)) return fail('bad_status');
-          // Curation has no upstream rule to check against: a flag is a flag, and
-          // a note is whatever the reader typed. Only the types are ours to hold.
+          // Favourites and notes require type validation only.
           if (setsFavourite && typeof patch.favourite !== 'boolean') return fail('bad_favourite');
           if (setsNote && patch.note !== null && typeof patch.note !== 'string') {
             return fail('bad_note');
@@ -315,8 +311,8 @@ export function createApp(db) {
           if (setsChapter && !validChapter(patch.chapter, row)) return fail('bad_chapter');
 
           try {
-            // Two writes, because reading state and curation are separate
-            // concerns; each ignores the other's keys.
+            // These writes are separate, without a shared transaction.
+            // Each function ignores fields it doesn't own.
             if (setsStatus || setsChapter) applyReadingState(db, id, patch);
             if (setsFavourite || setsNote) setCuration(db, id, patch);
           } catch (err) {

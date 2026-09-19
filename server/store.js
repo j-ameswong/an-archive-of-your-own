@@ -1,14 +1,6 @@
-// Writing a parsed page back to the database.
-//
-// Enrichment owns the upstream facts and nothing else. Curation (note,
-// favourite) is the reader's: `upsertFic` never touches it, and `setCuration`
-// is the only thing that does -- that separation is the whole point of the
-// schema.
-//
-// Reading state is the one thing in between. A pasted chapter link is the
-// reader telling us where they stopped, so an import may set chapter,
-// resume_url and a status derived from them. What it may never do is overwrite
-// a status the reader set by hand: state_source says which is which.
+// Save parsed metadata and reader edits. Imports preserve notes, favourites
+// and manually chosen statuses. Chapter imports can update chapter, resume_url
+// and a derived status; state_source distinguishes derived and manual statuses.
 
 import { TAG_TYPES } from './parse.js';
 
@@ -32,11 +24,10 @@ const FACTS = [
 const now = () => new Date().toISOString();
 
 /**
- * Where an import leaves a fic, given how far into it the reader got.
+ * Derive reading status from the chapter position and work completion.
  *
- * Chapter 1 is "opened", not "started": a bare link carries no chapter at all,
- * and a link to chapter 1 says no more than a bare one does. A oneshot is
- * therefore never finished automatically -- that takes a hand edit.
+ * A missing position or chapter 1 yields to_read, including single-chapter
+ * works. See docs/decisions/0003-derive-reading-status-from-the-pasted-chapter-link.md.
  *
  * @param {{chapter: number|null, chapters_done: number|null,
  *   is_complete: number|null}} state
@@ -183,9 +174,9 @@ export function upsertFic(db, target, record) {
 /**
  * Set reading state by hand, from the reader rather than from a page.
  *
- * A chapter is a position, not a verdict: giving one re-derives the status and
- * hands it back to the import path, so a later refresh may move it again.
- * Giving a status pins it. Giving both writes the chapter and pins the status.
+ * A chapter alone recalculates status and sets state_source to 'import',
+ * allowing later chapter imports to recalculate it. A supplied status sets
+ * state_source to 'user', whether or not a chapter is also supplied.
  *
  * `resume_url` is a deep link built from AO3's chapter id, and a chapter
  * number cannot rebuild one, so a hand-set chapter clears it. Pasting a chapter
@@ -247,9 +238,7 @@ export function recordFetchFailure(db, slug, status, error = null) {
 }
 
 /**
- * Set curation -- the reader's own marks on a fic, as opposed to anything AO3
- * says about it. Deliberately not part of `upsertFic`: enrichment must never
- * be able to touch these, which is why they are written from here alone.
+ * Set the reader's favourite and note fields. Imports leave these untouched.
  *
  * An absent key means "leave this alone". A `note` of null or blank clears it,
  * so there is one representation of "no note" rather than two.

@@ -117,13 +117,8 @@ function hasChapters(fic) {
   return fic.kind === 'work' && (fic.chapters_done ?? 0) > 1;
 }
 
-// How far the reader is through what exists -- not how far the author is
-// through their plan, which is theirs and not the reader's business. A fic with
-// no chapters at all, which is every series, has nothing to show.
-//
-// `+` marks a work the author has not finished, so the denominator reads as
-// "at least this many". It is the one thing chapters_total was carrying that a
-// reader actually wants while browsing: is there an end to this yet.
+// Show the reader's position against posted chapters; + marks an ongoing work.
+// Hide progress when both the position and posted count are absent.
 function chapterProgress(fic, unit) {
   if (fic.chapter == null && fic.chapters_done == null) return null;
   if (fic.chapters_done == null) return `${fic.chapter}/? ${unit}`;

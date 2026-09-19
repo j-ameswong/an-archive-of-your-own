@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS fic (
     slug           TEXT NOT NULL,
     url            TEXT NOT NULL,
 
-    -- fic metadata, refreshed during scheduled enrich/import
+    -- AO3 metadata, refreshed on import
     title          TEXT,
     author         TEXT,
     author_url     TEXT,
@@ -36,12 +36,10 @@ CREATE TABLE IF NOT EXISTS fic (
                         CHECK (state_source IN ('import','user')),
     state_changed_at TEXT,
 
-    -- Enrichment bookkeeping: when the upstream facts above were last
-    -- refreshed, and why the last attempt failed. NULL status = never fetched.
-    -- 'fichub' is unused; SQLite cannot narrow a CHECK without rebuilding the
-    -- table, so the value stays. See docs/decisions/0001-scrape-ao3-directly.md.
-    -- These columns come last because ALTER TABLE ADD COLUMN appends, and an
-    -- existing database must end up with the column order this file declares.
+    -- Fetch tracking: attempt timestamp, outcome and error.
+    -- NULL status = never fetched; 'fichub' is unused.
+    -- See docs/decisions/0001-scrape-ao3-directly.md for its history.
+    -- Keep column order compatible with db/migrate_002.sql's INSERT ... SELECT *.
     enriched_at    TEXT,
     fetch_status   TEXT CHECK (fetch_status IN ('ok','restricted','missing','error','fichub')),
     fetch_error    TEXT,
@@ -56,9 +54,8 @@ CREATE TABLE IF NOT EXISTS fic_tag (
     PRIMARY KEY (fic_id, tag_type, tag)
 ) WITHOUT ROWID;
 
--- contentless_delete lets enrichment re-index a row with
--- DELETE ... WHERE rowid = ?; without it a delete must supply the exact old
--- column values, which a contentless table cannot give back.
+-- The store re-indexes entries using DELETE ... WHERE rowid = ?, supported by
+-- contentless_delete. Each rowid must match fic.id; no triggers maintain this index.
 CREATE VIRTUAL TABLE IF NOT EXISTS fic_fts USING fts5(
     title, author, summary, tags, content='', contentless_delete=1
 );
