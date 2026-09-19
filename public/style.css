@@ -174,7 +174,10 @@ body.no-scroll {
   font-size: 0.85rem;
 }
 
-.chip.active {
+/* The filter chips carry both, set together; the favourite button in the
+   detail panel carries only the attribute, which is the one that matters. */
+.chip.active,
+.chip[aria-pressed='true'] {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent);
@@ -381,12 +384,33 @@ select {
   white-space: pre-wrap;
 }
 
+.detail-curation {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
 .detail-note {
-  background: var(--accent-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.detail-note textarea {
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.6rem 0.8rem;
-  font-size: 0.9rem;
-  margin-bottom: 1rem;
+  /* Only vertically: a wider box would break out of the panel. */
+  resize: vertical;
+  min-height: 3.5rem;
 }
 
 .tag-group {
@@ -455,6 +479,8 @@ select {
 .detail-chapter-of { color: var(--text-muted); }
 
 .detail-status[aria-busy='true'],
-.detail-chapter[aria-busy='true'] { opacity: 0.6; }
+.detail-chapter[aria-busy='true'],
+.detail-curation[aria-busy='true'],
+.detail-note[aria-busy='true'] { opacity: 0.6; }
 
 .detail-status-error { color: var(--accent); }

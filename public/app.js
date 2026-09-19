@@ -408,26 +408,61 @@ async function openDetail(id, trigger) {
         <span class="detail-chapter-of">of ${escapeHtml(fic.chapters_done)}</span>
       </label>` : ''}
     ${fic.summary ? `<p class="detail-summary">${escapeHtml(fic.summary)}</p>` : ''}
-    ${fic.note ? `<div class="detail-note">${escapeHtml(fic.note)}</div>` : ''}
+    <div class="detail-curation">
+      <button type="button" class="chip" data-favourite-for="${escapeHtml(fic.id)}"
+              aria-pressed="${fic.favourite ? 'true' : 'false'}">★ Favourite</button>
+    </div>
+    <label class="detail-note">
+      Note
+      <textarea rows="3" data-note-for="${escapeHtml(fic.id)}"
+                placeholder="Why this one is worth keeping…">${escapeHtml(fic.note ?? '')}</textarea>
+    </label>
     ${tagGroups}
     ${href ? `<a class="detail-link" href="${escapeHtml(href)}" target="_blank" rel="noopener"
        data-resume-link>${fic.resume_url ? 'Continue Reading' : 'Open on AO3 →'}</a>` : ''}
   `, trigger);
+
+  rememberNote(fic);
 }
 
-// The panel's markup is replaced wholesale on every open, so both controls are
+// The chapter and status boxes carry their previous value in a data attribute,
+// but a note may contain newlines, which have no safe spelling there. Set it as
+// a property once the markup is in the document instead.
+function rememberNote(fic) {
+  const box = detailBody.querySelector('[data-note-for]');
+  if (box) box.dataset.current = fic.note ?? '';
+}
+
+// The panel's markup is replaced wholesale on every open, so every control is
 // reached by delegation rather than bound per render.
 detailBody.addEventListener('change', (e) => {
-  const control = e.target.closest('[data-status-for], [data-chapter-for]');
+  const control = e.target.closest('[data-status-for], [data-chapter-for], [data-note-for]');
   if (!control) return;
 
-  if (control.dataset.chapterFor === undefined) {
-    return saveReadingState(control, control.dataset.statusFor, { status: control.value });
+  if (control.dataset.statusFor !== undefined) {
+    return savePatch(control, control.dataset.statusFor, { status: control.value });
   }
+
+  if (control.dataset.noteFor !== undefined) {
+    // A note is curation: it changes nothing the list shows or counts.
+    if (control.value === control.dataset.current) return;
+    return savePatch(control, control.dataset.noteFor, { note: control.value },
+      { refreshList: false });
+  }
+
   // An empty box means "nowhere", which is a position like any other.
   const raw = control.value.trim();
-  return saveReadingState(control, control.dataset.chapterFor,
+  return savePatch(control, control.dataset.chapterFor,
     { chapter: raw === '' ? null : Number(raw) });
+});
+
+// A button, so it toggles on click rather than on change. The star is on the
+// cards and drives a filter, so the list does have to catch up.
+detailBody.addEventListener('click', (e) => {
+  const button = e.target.closest('[data-favourite-for]');
+  if (!button) return;
+  const on = button.getAttribute('aria-pressed') === 'true';
+  savePatch(button, button.dataset.favouriteFor, { favourite: !on });
 });
 
 // The response carries the whole fic, so the panel is brought back into line
@@ -459,6 +494,18 @@ function repaintDetail(fic) {
     input.dataset.current = fic.chapter ?? '';
   }
 
+  const title = detailBody.querySelector('.detail-title');
+  if (title) title.textContent = `${fic.title || 'Untitled'}${fic.favourite ? ' \u2605' : ''}`;
+
+  const favourite = detailBody.querySelector('[data-favourite-for]');
+  if (favourite) favourite.setAttribute('aria-pressed', fic.favourite ? 'true' : 'false');
+
+  // The server trims a note and reads a blank one as none, so the box shows
+  // what was actually stored rather than what was typed.
+  const note = detailBody.querySelector('[data-note-for]');
+  if (note) note.value = fic.note ?? '';
+  rememberNote(fic);
+
   // Editing a chapter by hand drops the deep link, so the action changes too.
   const link = detailBody.querySelector('[data-resume-link]');
   const href = safeUrl(fic.resume_url || fic.url);
@@ -468,10 +515,17 @@ function repaintDetail(fic) {
   }
 }
 
-async function saveReadingState(control, id, patch) {
-  const label = control.closest('label');
-  label.querySelector('.detail-status-error')?.remove();
-  label.setAttribute('aria-busy', 'true');
+// Every edit in the panel is one PATCH and one repaint from the response, so
+// the derivation rules are never restated here.
+//
+// refreshList is false for an edit the list cannot show. A note is the only
+// one: rebuilding the list would scroll it back to the top behind the open
+// dialog, for nothing the reader would see.
+async function savePatch(control, id, patch, { refreshList = true } = {}) {
+  // A bare button has no label around it; the row it sits in takes the message.
+  const group = control.closest('label, .detail-curation');
+  group.querySelector('.detail-status-error')?.remove();
+  group.setAttribute('aria-busy', 'true');
   control.disabled = true;
 
   try {
@@ -482,15 +536,15 @@ async function saveReadingState(control, id, patch) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     repaintDetail(await res.json());
-    // The list and the counts both key off status, so both are now stale.
-    await Promise.all([loadMeta(), fetchList({ reset: true })]);
+    // The list and the counts key off status and favourite alike.
+    if (refreshList) await Promise.all([loadMeta(), fetchList({ reset: true })]);
   } catch {
     // Put the control back where it was: the row did not change.
-    control.value = control.dataset.current ?? '';
-    label.insertAdjacentHTML('beforeend',
+    if (control.dataset.current !== undefined) control.value = control.dataset.current;
+    group.insertAdjacentHTML('beforeend',
       '<span class="detail-status-error">Couldn\u2019t save that.</span>');
   } finally {
-    label.removeAttribute('aria-busy');
+    group.removeAttribute('aria-busy');
     control.disabled = false;
   }
 }
@@ -534,9 +588,13 @@ window.addEventListener('popstate', () => {
   if (!detailEl.hidden) dismissDetail();
 });
 
-// Keep Tab inside the dialog while it is open.
+// Keep Tab inside the dialog while it is open. The panel holds a select, a
+// number box and a textarea as well as buttons and the link, and leaving any
+// of them out of the boundary would let Tab wrap early, past a control the
+// reader can still reach.
 function trapTab(e) {
-  const focusables = detailEl.querySelectorAll('button, a[href]');
+  const focusables = detailEl.querySelectorAll(
+    'button, a[href], select, textarea, input:not([type="hidden"])');
   if (!focusables.length) return;
   const first = focusables[0];
   const last = focusables[focusables.length - 1];

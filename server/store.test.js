@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { upsertFic, recordFetchFailure, deriveStatus, applyReadingState } from './store.js';
+import { upsertFic, recordFetchFailure, deriveStatus, applyReadingState, setCuration } from './store.js';
 
 const SCHEMA = readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8');
 
@@ -452,4 +452,83 @@ test('the last chapter of a finished work is read, by hand as on import', () => 
 
 test('editing a fic that is not there reports it rather than throwing', () => {
   assert.equal(applyReadingState(freshDb(), 999, { status: 'read' }), false);
+});
+
+test('a favourite is a flag the reader sets, stored as 0 or 1', () => {
+  const db = freshDb();
+  const { id } = upsertFic(db, TARGET, record());
+  assert.equal(readFic(db).favourite, 0, 'nothing arrives favourited');
+
+  assert.equal(setCuration(db, id, { favourite: true }), true);
+  assert.equal(readFic(db).favourite, 1);
+
+  setCuration(db, id, { favourite: false });
+  assert.equal(readFic(db).favourite, 0);
+});
+
+test('a note is kept verbatim, and a blank one is no note at all', () => {
+  const db = freshDb();
+  const { id } = upsertFic(db, TARGET, record());
+
+  setCuration(db, id, { note: '  Reread the ballroom scene.  ' });
+  assert.equal(readFic(db).note, 'Reread the ballroom scene.', 'surrounding space is not the note');
+
+  // Blank and null both mean "no note": one representation, not two.
+  setCuration(db, id, { note: '   ' });
+  assert.equal(readFic(db).note, null);
+
+  setCuration(db, id, { note: 'Back again.' });
+  setCuration(db, id, { note: null });
+  assert.equal(readFic(db).note, null);
+});
+
+test('curation touches only the key it was given', () => {
+  const db = freshDb();
+  const { id } = upsertFic(db, TARGET, record());
+  setCuration(db, id, { favourite: true, note: 'Both at once.' });
+
+  setCuration(db, id, { note: 'Just the note.' });
+  assert.equal(readFic(db).favourite, 1, 'an absent key leaves the column alone');
+
+  setCuration(db, id, { favourite: false });
+  assert.equal(readFic(db).note, 'Just the note.');
+});
+
+test('curation leaves reading state and upstream facts untouched', () => {
+  const db = freshDb();
+  const { id } = upsertFic(db, TARGET,
+    record({ chapters_done: 5, chapters_total: 5, is_complete: 1, chapter_ids: menu(5) }));
+  applyReadingState(db, id, { chapter: 3 });
+  const before = readFic(db);
+
+  setCuration(db, id, { favourite: true, note: 'A note.' });
+  const after = readFic(db);
+
+  for (const column of ['status', 'chapter', 'resume_url', 'last_read_at',
+                        'state_source', 'title', 'word_count', 'kudos']) {
+    assert.deepEqual(after[column], before[column], `curation moved ${column}`);
+  }
+});
+
+test('an empty curation patch writes nothing', () => {
+  const db = freshDb();
+  const { id } = upsertFic(db, TARGET, record());
+  assert.equal(setCuration(db, id, {}), false);
+});
+
+test('curating a fic that is not there reports it rather than throwing', () => {
+  assert.equal(setCuration(freshDb(), 999, { favourite: true }), false);
+});
+
+test('a re-import leaves curation exactly as the reader set it', () => {
+  const db = freshDb();
+  const { id } = upsertFic(db, TARGET, record());
+  setCuration(db, id, { favourite: true, note: 'Mine, not AO3’s.' });
+
+  upsertFic(db, TARGET, record({ title: 'A Work, Revised', kudos: 999 }));
+
+  const fic = readFic(db);
+  assert.equal(fic.title, 'A Work, Revised', 'the facts did refresh');
+  assert.equal(fic.favourite, 1);
+  assert.equal(fic.note, 'Mine, not AO3’s.');
 });

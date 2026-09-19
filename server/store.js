@@ -1,8 +1,9 @@
 // Writing a parsed page back to the database.
 //
 // Enrichment owns the upstream facts and nothing else. Curation (note,
-// favourite) is the reader's and is never written here -- that separation is
-// the whole point of the schema.
+// favourite) is the reader's: `upsertFic` never touches it, and `setCuration`
+// is the only thing that does -- that separation is the whole point of the
+// schema.
 //
 // Reading state is the one thing in between. A pasted chapter link is the
 // reader telling us where they stopped, so an import may set chapter,
@@ -243,4 +244,40 @@ export function recordFetchFailure(db, slug, status, error = null) {
      WHERE slug = ?`
   ).run(now(), status, error, slug);
   return result.changes > 0n;
+}
+
+/**
+ * Set curation -- the reader's own marks on a fic, as opposed to anything AO3
+ * says about it. Deliberately not part of `upsertFic`: enrichment must never
+ * be able to touch these, which is why they are written from here alone.
+ *
+ * An absent key means "leave this alone". A `note` of null or blank clears it,
+ * so there is one representation of "no note" rather than two.
+ *
+ * `fic_fts` indexes the upstream text only, so a note is not re-indexed.
+ *
+ * @param {{favourite?: boolean, note?: string|null}} patch validated by the
+ *   caller
+ * @returns {boolean} whether a row was updated
+ */
+export function setCuration(db, id, patch) {
+  const columns = [];
+  const values = [];
+
+  if (patch.favourite !== undefined) {
+    columns.push('favourite = ?');
+    values.push(patch.favourite ? 1 : 0);
+  }
+
+  if (patch.note !== undefined) {
+    const note = patch.note?.trim();
+    columns.push('note = ?');
+    values.push(note || null);
+  }
+
+  if (!columns.length) return false;
+
+  const result = write(db, `UPDATE fic SET ${columns.join(', ')} WHERE id = ?`)
+    .run(...values, id);
+  return Number(result.changes) > 0;
 }

@@ -18,7 +18,10 @@ more than one site. Against the current `db/schema.sql` they carry:
 The current schema is AO3-only: `slug` replaces `site` + `site_ref`, and
 `chapter` replaces `last_position` + `position_unit`.
 
-Nothing in `server/` reads either file. They are kept, not wired up.
+Nothing in `server/` reads either file. `db/archive_schema.sql` is kept in the
+repository as the record of what the schema narrowed down from;
+`db/archive.sqlite3` is a database and so is gitignored like the others, and
+exists only where it was built.
 
 Commits: `e45c9e2` (original schema), `717b1d9` (move to the AO3 database),
 `a377bf7` (drop `fandom_bucket`). The repository does not record why the project

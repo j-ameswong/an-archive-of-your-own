@@ -1,4 +1,8 @@
-archive*
+# Reading data is personal, and a database is not source. This covers the
+# working database and the backups taken before each migration.
 *.sqlite3
+
+# A live AO3 session cookie.
 .env
+
 logs/
